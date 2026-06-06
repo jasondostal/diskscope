@@ -52,6 +52,20 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--treemap" {
     let leaves = tiles.filter { !$0.isDir }.count
     print("treemap: \(index.count) entries → \(tiles.count) tiles (\(leaves) files drawn) in \(String(format: "%.2f", secs))s")
     print("wrote \(out)")
+
+    // Proportionality check: tile area should track file size with a ~constant ratio.
+    if ProcessInfo.processInfo.environment["DSDEBUG"] != nil {
+        let leafTiles = tiles.filter { !$0.isDir }
+            .map { (size: index.nodes[$0.node].ownSize, area: $0.rect.area, name: index.nodes[$0.node].name) }
+            .sorted { $0.size > $1.size }
+        print("\nproportionality (area / byte should be ~constant):")
+        for t in leafTiles.prefix(6) {
+            print(String(format: "  %12llu B  area=%9.1f  ratio=%.6f  %@", t.size, t.area, t.area / Double(max(1, t.size)), t.name))
+        }
+        if let mid = leafTiles.dropFirst(leafTiles.count / 2).first {
+            print(String(format: "  %12llu B  area=%9.1f  ratio=%.6f  %@ (median-ish)", mid.size, mid.area, mid.area / Double(max(1, mid.size)), mid.name))
+        }
+    }
     exit(0)
 }
 

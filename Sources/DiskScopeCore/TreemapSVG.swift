@@ -17,7 +17,7 @@ public enum TreemapSVG {
         // Leaves (files) tile the whole canvas — the classic WinDirStat fill, colored by type.
         for t in tiles where !t.isDir {
             let name = index.nodes[t.node].name
-            s += rect(t.rect, fill: color(forExtension: ext(of: name)), stroke: "#00000040", strokeW: 0.5)
+            s += rect(t.rect, fill: FilePalette.hex(forExt: ext(of: name)), stroke: "#00000040", strokeW: 0.5)
         }
         // Outline top-level folders so the major structure reads through the file colors.
         for t in tiles where t.isDir && t.depth == 1 {

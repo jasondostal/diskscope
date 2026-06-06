@@ -104,17 +104,23 @@ struct TreemapCanvas: View {
         GeometryReader { geo in
             let tiles = model.tiles(for: geo.size)
             Canvas { ctx, _ in
-                // Leaves: filled, colored by extension.
+                // Leaves: cushioned gradient fill per file, with a consistent thin border
+                // so adjacent same-category cells stay visually distinct (each file reads
+                // as its own tile, not a merged block).
                 for t in tiles where !t.isDir {
                     let r = cg(t.rect)
-                    ctx.fill(Path(r), with: .color(color(forExt: model.ext(of: t.node))))
-                    if t.rect.w > 2.5, t.rect.h > 2.5 {
-                        ctx.stroke(Path(r), with: .color(.black.opacity(0.22)), lineWidth: 0.5)
+                    let (top, bottom) = cushion(model.ext(of: t.node))
+                    ctx.fill(Path(r), with: .linearGradient(
+                        Gradient(colors: [top, bottom]),
+                        startPoint: CGPoint(x: r.minX, y: r.minY),
+                        endPoint: CGPoint(x: r.minX, y: r.maxY)))
+                    if t.rect.w > 3, t.rect.h > 3 {
+                        ctx.stroke(Path(r), with: .color(bg.opacity(0.55)), lineWidth: 0.5)
                     }
                 }
                 // Top-level folder outlines for structure.
                 for t in tiles where t.isDir && t.depth == 1 {
-                    ctx.stroke(Path(cg(t.rect)), with: .color(.white.opacity(0.30)), lineWidth: 1)
+                    ctx.stroke(Path(cg(t.rect)), with: .color(.white.opacity(0.22)), lineWidth: 1)
                 }
                 // Hover highlight.
                 if let h = hover, let t = tiles.first(where: { $0.node == h.node }) {
@@ -146,10 +152,14 @@ struct TreemapCanvas: View {
     }
 }
 
-/// Stable vibrant hue per extension (matches the SVG renderer). Real palette → OKLCH later.
-func color(forExt e: String) -> Color {
-    guard !e.isEmpty else { return Color(hue: 0.61, saturation: 0.08, brightness: 0.40) }
-    var h: UInt64 = 1469598103934665603
-    for b in e.utf8 { h = (h ^ UInt64(b)) &* 1099511628211 }
-    return Color(hue: Double(h % 360) / 360.0, saturation: 0.62, brightness: 0.85)
+/// Cushion gradient (lighter top → base bottom) for a file's category — the WinDirStat
+/// 3D look, and it keeps same-category neighbors readable via the shading boundary.
+func cushion(_ ext: String) -> (top: Color, bottom: Color) {
+    let base = FilePalette.oklch(forExt: ext)
+    return (oklchColor(base.lightened(0.07)), oklchColor(base.lightened(-0.05)))
+}
+
+func oklchColor(_ c: FilePalette.OKLCH) -> Color {
+    let rgb = FilePalette.srgb(c)
+    return Color(.sRGB, red: rgb.r, green: rgb.g, blue: rgb.b)
 }
