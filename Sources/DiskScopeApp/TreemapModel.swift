@@ -53,6 +53,15 @@ final class TreemapModel: ObservableObject {
         revision += 1
     }
 
+    /// Minimum on-screen cell size before the treemap stops subdividing (from Settings).
+    var minSide: Double = 2
+    func setMinSide(_ v: Double) {
+        guard v != minSide else { return }
+        minSide = v
+        invalidateRenderCaches()
+        revision += 1
+    }
+
     func scan(_ rawPath: String) {
         // Canonicalize so the index keys match the symlink-resolved paths FSEvents reports
         // (else live reconcile silently misses — the /tmp vs /private/tmp trap).
@@ -125,7 +134,7 @@ final class TreemapModel: ObservableObject {
         cachedTiles = Treemap.layout(
             index, root: 0,
             in: Rect(x: 0, y: 0, w: Double(size.width), h: Double(size.height)),
-            minSide: 2, cushionHeight: 0.42)
+            minSide: minSide, cushionHeight: 0.42)
         cachedSize = size
         return cachedTiles
     }

@@ -17,6 +17,10 @@ public enum FilePalette {
         case code, web, image, video, audio, archive, document, data, binary, system, other
     }
 
+    /// Representative categories for a legend/theme swatch preview.
+    public static let previewCategories: [Category] =
+        [.code, .web, .image, .video, .audio, .archive, .document, .data, .binary, .other]
+
     /// Base OKLCH per category — even hue spacing, moderate chroma, dark-tuned lightness.
     public static func oklch(_ cat: Category) -> OKLCH {
         // Muted jewel tones: low chroma, mid lightness — calm on a dark canvas. Hues stay

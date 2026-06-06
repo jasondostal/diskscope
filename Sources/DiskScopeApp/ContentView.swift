@@ -6,7 +6,8 @@ let bg = Color(red: 0.043, green: 0.051, blue: 0.063) // #0b0d10
 
 struct ContentView: View {
     @StateObject private var model = TreemapModel()
-    @StateObject private var theme = ThemeManager()
+    @EnvironmentObject private var theme: ThemeManager
+    @EnvironmentObject private var settings: SettingsStore
     @State private var selected: Int?
     @State private var hover: HoverInfo?
 
@@ -20,8 +21,12 @@ struct ContentView: View {
         }
         .background(theme.current.palette.backgroundColor)
         .frame(minWidth: 860, minHeight: 600)
-        .onAppear { model.setPalette(theme.current.palette) }
+        .onAppear {
+            model.setPalette(theme.current.palette)
+            model.setMinSide(settings.minTileSize)
+        }
         .onChange(of: theme.selectedID) { _, _ in model.setPalette(theme.current.palette) }
+        .onChange(of: settings.minTileSize) { _, v in model.setMinSide(v) }
     }
 
     private var themeMenu: some View {
