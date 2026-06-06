@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import CoreGraphics
 import DiskScopeCore
 
 /// Decorator sink: forwards every event to the real index while counting items/bytes and
@@ -52,6 +53,8 @@ final class TreemapModel: ObservableObject {
     private var index: FileIndex?
     private var cachedTiles: [TreemapTile] = []
     private var cachedSize: CGSize = .zero
+    private var cushionCache: CGImage?
+    private var cushionSize: CGSize = .zero
 
     func scan(_ p: String) {
         path = p
@@ -118,9 +121,27 @@ final class TreemapModel: ObservableObject {
         cachedTiles = Treemap.layout(
             index, root: 0,
             in: Rect(x: 0, y: 0, w: Double(size.width), h: Double(size.height)),
-            minSide: 2)
+            minSide: 2, cushionHeight: 0.42)
         cachedSize = size
         return cachedTiles
+    }
+
+    /// Cushion-shaded treemap bitmap for the given size (cached). The leaves are rendered
+    /// as Phong-shaded pillows; selection/hover outlines are drawn over this by the view.
+    func cushionImage(for size: CGSize) -> CGImage? {
+        guard index != nil, size.width > 2, size.height > 2 else { return nil }
+        if size == cushionSize, let c = cushionCache { return c }
+        let w = Int(size.width), h = Int(size.height)
+        let rgba = Treemap.renderCushionRGBA(tiles: tiles(for: size), width: w, height: h, ambient: 0.58) { [weak self] node in
+            self.map { FilePalette.srgb(forExt: $0.ext(of: node)) } ?? (0.5, 0.5, 0.5)
+        }
+        guard let provider = CGDataProvider(data: Data(rgba) as CFData) else { return nil }
+        let img = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32,
+                          bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
+                          bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                          provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+        cushionCache = img; cushionSize = size
+        return img
     }
 
     /// File extension for a node, for coloring.

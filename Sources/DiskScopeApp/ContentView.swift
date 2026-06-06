@@ -227,31 +227,24 @@ struct TreemapCanvas: View {
     var body: some View {
         GeometryReader { geo in
             let tiles = model.tiles(for: geo.size)
-            Canvas { ctx, _ in
-                for t in tiles where !t.isDir {
-                    let r = cg(t.rect)
-                    let (center, edge) = cushion(model.ext(of: t.node))
-                    // Radial gradient = an inflated pillow: lit center, shaded rim.
-                    ctx.fill(Path(r), with: .radialGradient(
-                        Gradient(colors: [center, edge]),
-                        center: CGPoint(x: r.midX - r.width * 0.15, y: r.midY - r.height * 0.15),
-                        startRadius: 0,
-                        endRadius: max(r.width, r.height) * 0.75))
-                    if t.rect.w > 3, t.rect.h > 3 {
-                        ctx.stroke(Path(r), with: .color(bg.opacity(0.6)), lineWidth: 0.5)
+            ZStack {
+                // Cushioned, Phong-shaded leaves (bitmap).
+                if let img = model.cushionImage(for: geo.size) {
+                    Image(decorative: img, scale: 1).resizable().frame(width: geo.size.width, height: geo.size.height)
+                }
+                // Overlays: structure + selection + hover outlines.
+                Canvas { ctx, _ in
+                    for t in tiles where t.isDir && t.depth == 1 {
+                        ctx.stroke(Path(cg(t.rect)), with: .color(.white.opacity(0.20)), lineWidth: 1)
+                    }
+                    if let sel = selected, let t = tiles.first(where: { $0.node == sel }) {
+                        ctx.stroke(Path(cg(t.rect)), with: .color(.white), lineWidth: 2)
+                    }
+                    if let h = hover, h.node != selected, let t = tiles.first(where: { $0.node == h.node }) {
+                        ctx.stroke(Path(cg(t.rect)), with: .color(.white.opacity(0.6)), lineWidth: 1)
                     }
                 }
-                for t in tiles where t.isDir && t.depth == 1 {
-                    ctx.stroke(Path(cg(t.rect)), with: .color(.white.opacity(0.22)), lineWidth: 1)
-                }
-                // Selection (from tree or treemap click) — bold outline of the region.
-                if let sel = selected, let t = tiles.first(where: { $0.node == sel }) {
-                    ctx.stroke(Path(cg(t.rect)), with: .color(.white), lineWidth: 2)
-                }
-                // Hover highlight.
-                if let h = hover, h.node != selected, let t = tiles.first(where: { $0.node == h.node }) {
-                    ctx.stroke(Path(cg(t.rect)), with: .color(.white.opacity(0.6)), lineWidth: 1)
-                }
+                .allowsHitTesting(false)
             }
             .contentShape(Rectangle())
             .onContinuousHover { phase in
@@ -277,11 +270,6 @@ struct TreemapCanvas: View {
 }
 
 // MARK: - Color helpers
-
-func cushion(_ ext: String) -> (center: Color, edge: Color) {
-    let base = FilePalette.oklch(forExt: ext)
-    return (oklchColor(base.lightened(0.11)), oklchColor(base.lightened(-0.07)))
-}
 
 func categoryColor(_ cat: FilePalette.Category) -> Color { oklchColor(FilePalette.oklch(cat)) }
 

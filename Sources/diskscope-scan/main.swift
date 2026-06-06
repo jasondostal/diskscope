@@ -1,5 +1,26 @@
 import Foundation
+import CoreGraphics
+import ImageIO
+import UniformTypeIdentifiers
 import DiskScopeCore
+
+func cliExt(_ n: String) -> String {
+    guard let d = n.lastIndex(of: "."), d != n.startIndex else { return "" }
+    return String(n[n.index(after: d)...]).lowercased()
+}
+
+func writePNG(_ rgba: [UInt8], width: Int, height: Int, to path: String) {
+    guard let provider = CGDataProvider(data: Data(rgba) as CFData),
+          let img = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+                            bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent),
+          let dest = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL,
+                                                     UTType.png.identifier as CFString, 1, nil)
+    else { return }
+    CGImageDestinationAddImage(dest, img, nil)
+    CGImageDestinationFinalize(dest)
+}
 
 // diskscope-scan <path> [workers]      — scan a path, report count + wall-clock
 // diskscope-scan --watch <path>        — build index, watch live, print reconcile deltas
@@ -66,6 +87,24 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--treemap" {
             print(String(format: "  %12llu B  area=%9.1f  ratio=%.6f  %@ (median-ish)", mid.size, mid.area, mid.area / Double(max(1, mid.size)), mid.name))
         }
     }
+    exit(0)
+}
+
+// diskscope-scan --cushion <path> [out.png]  — render the cushioned treemap to PNG (preview)
+if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--cushion" {
+    let target = CommandLine.arguments[2]
+    let out = CommandLine.arguments.count > 3 ? CommandLine.arguments[3] : "/tmp/diskscope-cushion.png"
+    let index = FileIndex()
+    DiskScopeScanner.scan(path: target, into: index)
+    index.aggregate()
+    let W = 1600, H = 1000
+    let tiles = Treemap.layout(index, root: 0, in: Rect(x: 0, y: 0, w: Double(W), h: Double(H)),
+                               minSide: 1.5, cushionHeight: 0.42)
+    let rgba = Treemap.renderCushionRGBA(tiles: tiles, width: W, height: H, ambient: 0.58) { node in
+        FilePalette.srgb(forExt: cliExt(index.nodes[node].name))
+    }
+    writePNG(rgba, width: W, height: H, to: out)
+    print("cushion: \(tiles.count) tiles → \(out)")
     exit(0)
 }
 

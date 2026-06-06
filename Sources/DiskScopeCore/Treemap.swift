@@ -9,14 +9,21 @@ public struct Rect: Equatable, Sendable {
     public var area: Double { w * h }
 }
 
-/// One laid-out cell: which index node it is, where it goes, how deep, and whether it's
-/// a directory (container) or a file (leaf). The renderer colors leaves by type and may
-/// draw directory borders/cushions.
+/// Accumulated cushion-surface coefficients (van Wijk cushion treemaps). The surface
+/// height adds a parabolic ridge per nesting level; these are the per-axis coefficients
+/// so the renderer can derive the normal at any pixel: nx = -(2·s2x·x + s1x), ny likewise.
+public struct Cushion: Sendable, Equatable {
+    public var s1x = 0.0, s2x = 0.0, s1y = 0.0, s2y = 0.0
+}
+
+/// One laid-out cell: which index node it is, where it goes, how deep, whether it's a
+/// directory (container) or file (leaf), and its accumulated cushion coefficients.
 public struct TreemapTile: Sendable {
     public let node: Int
     public let rect: Rect
     public let depth: Int
     public let isDir: Bool
+    public var cushion = Cushion()
 }
 
 /// Squarified treemap layout (Bruls, Huizing & van Wijk 2000): subdivide a rectangle
@@ -33,16 +40,25 @@ public enum Treemap {
     ///   (in the same units as `rect` — typically pixels). Bounds the tile count on huge
     ///   trees: a 1px-floor over a screen-sized rect can't produce millions of tiles.
     public static func layout(_ index: FileIndex, root: Int, in rect: Rect,
-                              maxDepth: Int = .max, minSide: Double = 1.0) -> [TreemapTile] {
+                              maxDepth: Int = .max, minSide: Double = 1.0,
+                              cushionHeight: Double = 0.5, cushionScale: Double = 0.75) -> [TreemapTile] {
         var tiles: [TreemapTile] = []
         layoutNode(index, node: root, rect: rect, depth: 0,
-                   maxDepth: maxDepth, minSide: minSide, into: &tiles)
+                   maxDepth: maxDepth, minSide: minSide,
+                   coeffs: Cushion(), h: cushionHeight, scale: cushionScale, into: &tiles)
         return tiles
     }
 
     private static func layoutNode(_ index: FileIndex, node: Int, rect: Rect, depth: Int,
-                                   maxDepth: Int, minSide: Double, into tiles: inout [TreemapTile]) {
-        tiles.append(TreemapTile(node: node, rect: rect, depth: depth, isDir: index.nodes[node].isDir))
+                                   maxDepth: Int, minSide: Double,
+                                   coeffs: Cushion, h: Double, scale: Double,
+                                   into tiles: inout [TreemapTile]) {
+        // Add this rectangle's ridge to the inherited cushion (sharper as we go deeper).
+        var c = coeffs
+        addRidge(rect.x, rect.x + rect.w, h, &c.s1x, &c.s2x)
+        addRidge(rect.y, rect.y + rect.h, h, &c.s1y, &c.s2y)
+        tiles.append(TreemapTile(node: node, rect: rect, depth: depth,
+                                 isDir: index.nodes[node].isDir, cushion: c))
         guard depth < maxDepth, index.nodes[node].isDir,
               rect.w >= minSide, rect.h >= minSide else { return }
 
@@ -55,8 +71,71 @@ public enum Treemap {
 
         for (childNode, childRect) in squarify(kids, in: rect) where childRect.w >= minSide && childRect.h >= minSide {
             layoutNode(index, node: childNode, rect: childRect, depth: depth + 1,
-                       maxDepth: maxDepth, minSide: minSide, into: &tiles)
+                       maxDepth: maxDepth, minSide: minSide,
+                       coeffs: c, h: h * scale, scale: scale, into: &tiles)
         }
+    }
+
+    /// Add a parabolic ridge over [x1,x2] (peaks at the centre, zero slope there; ±slope
+    /// at the edges) into the cushion's per-axis coefficients.
+    private static func addRidge(_ x1: Double, _ x2: Double, _ h: Double,
+                                 _ s1: inout Double, _ s2: inout Double) {
+        let w = x2 - x1
+        guard w > 0 else { return }
+        s1 += 4 * h * (x2 + x1) / w
+        s2 -= 4 * h / w
+    }
+
+    /// Render cushioned, Phong-shaded leaf cells into an RGBA8 pixel buffer (width*height*4,
+    /// premultiplied-opaque). No CoreGraphics dependency — pure bytes — so it's testable and
+    /// the caller wraps it in a CGImage. `colorFor` returns the leaf's base sRGB (0…1).
+    public static func renderCushionRGBA(
+        tiles: [TreemapTile], width: Int, height: Int,
+        background: (r: Double, g: Double, b: Double) = (0.043, 0.051, 0.063),
+        light: (x: Double, y: Double, z: Double) = (-0.32, -0.45, 0.83),
+        ambient: Double = 0.42,
+        colorFor: (Int) -> (r: Double, g: Double, b: Double)
+    ) -> [UInt8] {
+        var buf = [UInt8](repeating: 255, count: max(0, width * height * 4))
+        guard width > 0, height > 0 else { return buf }
+
+        func u8(_ v: Double) -> UInt8 { UInt8(max(0, min(255, (v * 255).rounded()))) }
+        let bgR = u8(background.r), bgG = u8(background.g), bgB = u8(background.b)
+        for p in 0..<(width * height) {
+            buf[p * 4] = bgR; buf[p * 4 + 1] = bgG; buf[p * 4 + 2] = bgB
+        }
+
+        let ll = (light.x * light.x + light.y * light.y + light.z * light.z).squareRoot()
+        let lx = light.x / ll, ly = light.y / ll, lz = light.z / ll
+
+        for t in tiles where !t.isDir {
+            let (cr, cg, cb) = colorFor(t.node)
+            let c = t.cushion
+            let x0 = max(0, Int(t.rect.x.rounded(.down)))
+            let y0 = max(0, Int(t.rect.y.rounded(.down)))
+            let x1 = min(width, Int((t.rect.x + t.rect.w).rounded(.up)))
+            let y1 = min(height, Int((t.rect.y + t.rect.h).rounded(.up)))
+            if x1 <= x0 || y1 <= y0 { continue }
+
+            for py in y0..<y1 {
+                let fy = Double(py) + 0.5
+                let ny = -(2 * c.s2y * fy + c.s1y)
+                let rowBase = py * width
+                for px in x0..<x1 {
+                    let fx = Double(px) + 0.5
+                    let nx = -(2 * c.s2x * fx + c.s1x)
+                    let nlen = (nx * nx + ny * ny + 1).squareRoot()
+                    var cosA = (nx * lx + ny * ly + lz) / nlen
+                    if cosA < 0 { cosA = 0 }
+                    let intensity = min(1.0, ambient + (1 - ambient) * cosA)
+                    let i = (rowBase + px) * 4
+                    buf[i] = u8(cr * intensity)
+                    buf[i + 1] = u8(cg * intensity)
+                    buf[i + 2] = u8(cb * intensity)
+                }
+            }
+        }
+        return buf
     }
 
     /// Place size-weighted items into `rect`, keeping cells as square as possible.
