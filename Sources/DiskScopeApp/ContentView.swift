@@ -74,6 +74,7 @@ struct ContentView: View {
             if model.state == .ready {
                 Text("\(humanSize(model.totalSize)) · \(model.fileCount.formatted()) files · \(String(format: "%.1fs", model.scanSeconds))")
                     .font(.callout).foregroundStyle(.secondary).monospacedDigit()
+                Button { model.scan(model.path) } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                 Button("Choose…") { chooseFolder() }
             }
         }
@@ -117,7 +118,9 @@ struct TreeListView: View {
         if let root = model.makeRootNode() {
             List(selection: $selected) {
                 OutlineGroup([root], children: \.children) { node in
-                    TreeRow(node: node, total: model.totalSize).tag(node.id)
+                    TreeRow(node: node, total: model.totalSize)
+                        .tag(node.id)
+                        .contextMenu { fileMenu(model, node.id) }
                 }
             }
             .listStyle(.sidebar)
@@ -259,6 +262,9 @@ struct TreemapCanvas: View {
             .gesture(SpatialTapGesture().onEnded { ev in
                 if let t = hitTest(tiles, ev.location) { selected = t.node }
             })
+            .contextMenu {
+                if let node = hover?.node ?? selected { fileMenu(model, node) }
+            }
         }
     }
 
@@ -270,6 +276,14 @@ struct TreemapCanvas: View {
 }
 
 // MARK: - Color helpers
+
+@ViewBuilder
+func fileMenu(_ model: TreemapModel, _ node: Int) -> some View {
+    Button { model.reveal(node) } label: { Label("Reveal in Finder", systemImage: "folder") }
+    Button { model.open(node) } label: { Label("Open", systemImage: "arrow.up.forward.app") }
+    Divider()
+    Button(role: .destructive) { model.moveToTrash(node) } label: { Label("Move to Trash", systemImage: "trash") }
+}
 
 func categoryColor(_ cat: FilePalette.Category) -> Color { oklchColor(FilePalette.oklch(cat)) }
 

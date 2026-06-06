@@ -1,6 +1,7 @@
 import Foundation
 import Darwin
 import CoreGraphics
+import AppKit
 import DiskScopeCore
 
 /// Used bytes on the volume containing `path` — the denominator for a scan percentage.
@@ -27,6 +28,8 @@ final class TreemapModel: ObservableObject {
     @Published var scanFraction: Double?   // nil = indeterminate (subfolder / unknown total)
     /// Per-extension breakdown, largest first — drives the legend pane.
     @Published var legend: [LegendEntry] = []
+    /// Bumped on any index mutation (trash) to force the views to re-render.
+    @Published private(set) var revision = 0
 
     private var index: FileIndex?
     private var cachedTiles: [TreemapTile] = []
@@ -52,30 +55,7 @@ final class TreemapModel: ObservableObject {
             idx.aggregate()
             let secs = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1e9
 
-            // Tally bytes + count per extension for the legend.
-            var bytesByExt: [String: UInt64] = [:]
-            var countByExt: [String: Int] = [:]
-            for n in idx.nodes where !n.isDir && !n.deleted {
-                let e = extOf(n.name)
-                bytesByExt[e, default: 0] += n.ownSize
-                countByExt[e, default: 0] += 1
-            }
-            let total = max(1, idx.nodes.first?.totalSize ?? 1)
-            var entries = bytesByExt.map { e, bytes in
-                LegendEntry(ext: e, bytes: bytes, count: countByExt[e] ?? 0,
-                            fraction: Double(bytes) / Double(total))
-            }.sorted { $0.bytes > $1.bytes }
-            // Keep the top slice; roll the long tail into one "other" row.
-            let cap = 22
-            if entries.count > cap {
-                let tail = entries[cap...]
-                let tailBytes = tail.reduce(UInt64(0)) { $0 + $1.bytes }
-                let tailCount = tail.reduce(0) { $0 + $1.count }
-                entries = Array(entries.prefix(cap)) + [LegendEntry(
-                    ext: "·other", bytes: tailBytes, count: tailCount,
-                    fraction: Double(tailBytes) / Double(total))]
-            }
-            let legend = entries
+            let legend = computeLegend(idx)
 
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -137,6 +117,48 @@ final class TreemapModel: ObservableObject {
 
     /// Root of the directory tree (the scanned folder), or nil before a scan completes.
     func makeRootNode() -> TreeNode? { index.map { TreeNode(id: 0, index: $0) } }
+
+    // MARK: - File actions
+
+    func url(for node: Int) -> URL? {
+        guard let index, node >= 0, node < index.nodes.count else { return nil }
+        return URL(fileURLWithPath: index.path(of: node))
+    }
+
+    func reveal(_ node: Int) {
+        guard let u = url(for: node) else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([u])
+    }
+
+    func open(_ node: Int) {
+        guard let u = url(for: node) else { return }
+        NSWorkspace.shared.open(u)
+    }
+
+    /// Move a file/folder to the Trash and sync the index (reconcile its parent), so the
+    /// treemap, tree, and legend all update without a full re-scan.
+    func moveToTrash(_ node: Int) {
+        guard let idx = index, node > 0, let u = url(for: node) else { return }
+        let parent = u.deletingLastPathComponent().path
+        do {
+            try FileManager.default.trashItem(at: u, resultingItemURL: nil)
+            idx.reconcile(directoryPath: parent)
+            idx.aggregate()
+            legend = computeLegend(idx)
+            totalSize = idx.nodes.first?.totalSize ?? 0
+            fileCount = idx.fileCount
+            dirCount = idx.dirCount
+            invalidateRenderCaches()
+            revision += 1
+        } catch {
+            NSSound.beep()
+        }
+    }
+
+    private func invalidateRenderCaches() {
+        cachedTiles = []; cachedSize = .zero
+        cushionCache = nil; cushionSize = .zero
+    }
 }
 
 /// One row of the file-type legend.
@@ -147,6 +169,30 @@ struct LegendEntry: Identifiable {
     let fraction: Double
     var id: String { ext }
     var displayExt: String { ext.isEmpty ? "(none)" : (ext.hasPrefix("·") ? "other" : ".\(ext)") }
+}
+
+/// Build the per-extension legend (largest first, long tail folded into "other").
+func computeLegend(_ idx: FileIndex) -> [LegendEntry] {
+    var bytesByExt: [String: UInt64] = [:]
+    var countByExt: [String: Int] = [:]
+    for n in idx.nodes where !n.isDir && !n.deleted {
+        let e = extOf(n.name)
+        bytesByExt[e, default: 0] += n.ownSize
+        countByExt[e, default: 0] += 1
+    }
+    let total = max(1, idx.nodes.first?.totalSize ?? 1)
+    var entries = bytesByExt.map { e, bytes in
+        LegendEntry(ext: e, bytes: bytes, count: countByExt[e] ?? 0, fraction: Double(bytes) / Double(total))
+    }.sorted { $0.bytes > $1.bytes }
+    let cap = 22
+    if entries.count > cap {
+        let tail = entries[cap...]
+        let tailBytes = tail.reduce(UInt64(0)) { $0 + $1.bytes }
+        let tailCount = tail.reduce(0) { $0 + $1.count }
+        entries = Array(entries.prefix(cap)) + [LegendEntry(
+            ext: "·other", bytes: tailBytes, count: tailCount, fraction: Double(tailBytes) / Double(total))]
+    }
+    return entries
 }
 
 /// Extension (lowercased, no dot) of a filename, or "" if none.
