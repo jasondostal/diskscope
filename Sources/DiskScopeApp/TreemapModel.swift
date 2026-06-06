@@ -4,6 +4,12 @@ import CoreGraphics
 import AppKit
 import DiskScopeCore
 
+/// Symlink-resolved absolute path (matches what FSEvents emits); unchanged if realpath fails.
+func canonicalPath(_ p: String) -> String {
+    var buf = [CChar](repeating: 0, count: Int(PATH_MAX))
+    return realpath(p, &buf) != nil ? String(cString: buf) : p
+}
+
 /// Used bytes on the volume containing `path` — the denominator for a scan percentage.
 func volumeUsedBytes(_ path: String) -> UInt64 {
     var s = statfs()
@@ -36,12 +42,17 @@ final class TreemapModel: ObservableObject {
     private var cachedSize: CGSize = .zero
     private var cushionCache: CGImage?
     private var cushionSize: CGSize = .zero
+    private var watcher: FSEventsWatcher?
 
-    func scan(_ p: String) {
+    func scan(_ rawPath: String) {
+        // Canonicalize so the index keys match the symlink-resolved paths FSEvents reports
+        // (else live reconcile silently misses — the /tmp vs /private/tmp trap).
+        let p = canonicalPath(rawPath)
         path = p
         state = .scanning
         scannedCount = 0; scannedBytes = 0; scanFraction = nil
         cachedTiles = []; cachedSize = .zero
+        watcher?.stop(); watcher = nil
         let t0 = DispatchTime.now()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let volUsed = volumeUsedBytes(p)
@@ -66,8 +77,36 @@ final class TreemapModel: ObservableObject {
                 self.scanSeconds = secs
                 self.legend = legend
                 self.state = .ready
+                self.startWatching(p)
             }
         }
+    }
+
+    // MARK: - Live auto-refresh (FSEvents → reconcile)
+
+    private func startWatching(_ root: String) {
+        watcher?.stop()
+        let w = FSEventsWatcher(roots: [root]) { [weak self] dirs, _ in
+            // Hop to main: reconcile mutates the index the UI reads on the main thread.
+            DispatchQueue.main.async { self?.applyChanges(dirs) }
+        }
+        _ = w.start()
+        watcher = w
+    }
+
+    /// Reconcile the directories FSEvents flagged, then refresh derived state once per batch.
+    private func applyChanges(_ dirs: [String]) {
+        guard let idx = index, state == .ready else { return }
+        var changed = false
+        for d in dirs where idx.reconcile(directoryPath: d).changed { changed = true }
+        guard changed else { return }
+        idx.aggregate()
+        legend = computeLegend(idx)
+        totalSize = idx.nodes.first?.totalSize ?? 0
+        fileCount = idx.fileCount
+        dirCount = idx.dirCount
+        invalidateRenderCaches()
+        revision += 1
     }
 
     /// Tiles laid out for the given canvas size (cached).
