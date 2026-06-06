@@ -26,9 +26,17 @@ struct ContentView: View {
         case .idle:
             emptyState
         case .scanning:
-            VStack(spacing: 12) {
-                ProgressView().controlSize(.large)
-                Text("Scanning \(model.path)…").foregroundStyle(.secondary)
+            VStack(spacing: 14) {
+                if let f = model.scanFraction {
+                    ProgressView(value: f).frame(width: 280)
+                    Text("\(Int(f * 100))%").font(.title2).monospacedDigit().foregroundStyle(.secondary)
+                } else {
+                    ProgressView().controlSize(.large)
+                }
+                Text("\(model.scannedCount.formatted()) items · \(humanSize(model.scannedBytes))")
+                    .font(.callout).monospacedDigit().foregroundStyle(.secondary)
+                Text(model.path).font(.caption).foregroundStyle(.tertiary)
+                    .lineLimit(1).truncationMode(.middle).frame(maxWidth: 360)
             }
         case .ready:
             VSplitView {
@@ -222,13 +230,15 @@ struct TreemapCanvas: View {
             Canvas { ctx, _ in
                 for t in tiles where !t.isDir {
                     let r = cg(t.rect)
-                    let (top, bottom) = cushion(model.ext(of: t.node))
-                    ctx.fill(Path(r), with: .linearGradient(
-                        Gradient(colors: [top, bottom]),
-                        startPoint: CGPoint(x: r.minX, y: r.minY),
-                        endPoint: CGPoint(x: r.minX, y: r.maxY)))
+                    let (center, edge) = cushion(model.ext(of: t.node))
+                    // Radial gradient = an inflated pillow: lit center, shaded rim.
+                    ctx.fill(Path(r), with: .radialGradient(
+                        Gradient(colors: [center, edge]),
+                        center: CGPoint(x: r.midX - r.width * 0.15, y: r.midY - r.height * 0.15),
+                        startRadius: 0,
+                        endRadius: max(r.width, r.height) * 0.75))
                     if t.rect.w > 3, t.rect.h > 3 {
-                        ctx.stroke(Path(r), with: .color(bg.opacity(0.55)), lineWidth: 0.5)
+                        ctx.stroke(Path(r), with: .color(bg.opacity(0.6)), lineWidth: 0.5)
                     }
                 }
                 for t in tiles where t.isDir && t.depth == 1 {
@@ -268,9 +278,9 @@ struct TreemapCanvas: View {
 
 // MARK: - Color helpers
 
-func cushion(_ ext: String) -> (top: Color, bottom: Color) {
+func cushion(_ ext: String) -> (center: Color, edge: Color) {
     let base = FilePalette.oklch(forExt: ext)
-    return (oklchColor(base.lightened(0.07)), oklchColor(base.lightened(-0.05)))
+    return (oklchColor(base.lightened(0.11)), oklchColor(base.lightened(-0.07)))
 }
 
 func categoryColor(_ cat: FilePalette.Category) -> Color { oklchColor(FilePalette.oklch(cat)) }

@@ -1,5 +1,35 @@
 import Foundation
+import Darwin
 import DiskScopeCore
+
+/// Decorator sink: forwards every event to the real index while counting items/bytes and
+/// firing a throttled progress callback — so the scan can show live progress, not a spinner.
+final class ProgressSink: ScanSink {
+    private let inner: ScanSink
+    private let onProgress: (Int, UInt64) -> Void
+    private var count = 0
+    private var bytes: UInt64 = 0
+    private let interval = 8192
+
+    init(inner: ScanSink, onProgress: @escaping (Int, UInt64) -> Void) {
+        self.inner = inner; self.onProgress = onProgress
+    }
+    func directory(parent: Int, name: String, allocSize: UInt64) -> Int {
+        count += 1; tick(); return inner.directory(parent: parent, name: name, allocSize: allocSize)
+    }
+    func file(parent: Int, name: String, allocSize: UInt64) {
+        count += 1; bytes += allocSize; tick(); inner.file(parent: parent, name: name, allocSize: allocSize)
+    }
+    func unreadable() { inner.unreadable() }
+    private func tick() { if count % interval == 0 { onProgress(count, bytes) } }
+}
+
+/// Used bytes on the volume containing `path` — the denominator for a scan percentage.
+func volumeUsedBytes(_ path: String) -> UInt64 {
+    var s = statfs()
+    guard statfs(path, &s) == 0, s.f_bsize > 0 else { return 0 }
+    return UInt64(s.f_blocks - s.f_bfree) * UInt64(s.f_bsize)
+}
 
 /// View model: owns the scanned index and lays out treemap tiles on demand (cached by
 /// canvas size so resizes/redraws don't re-run the layout every frame).
@@ -12,6 +42,10 @@ final class TreemapModel: ObservableObject {
     @Published var dirCount: Int = 0
     @Published var totalSize: UInt64 = 0
     @Published var scanSeconds: Double = 0
+    // Live scan progress.
+    @Published var scannedCount: Int = 0
+    @Published var scannedBytes: UInt64 = 0
+    @Published var scanFraction: Double?   // nil = indeterminate (subfolder / unknown total)
     /// Per-extension breakdown, largest first — drives the legend pane.
     @Published var legend: [LegendEntry] = []
 
@@ -22,11 +56,20 @@ final class TreemapModel: ObservableObject {
     func scan(_ p: String) {
         path = p
         state = .scanning
+        scannedCount = 0; scannedBytes = 0; scanFraction = nil
         cachedTiles = []; cachedSize = .zero
         let t0 = DispatchTime.now()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let volUsed = volumeUsedBytes(p)
             let idx = FileIndex()
-            DiskScopeScanner.scan(path: p, into: idx)
+            let sink = ProgressSink(inner: idx) { c, b in
+                let frac = volUsed > 0 ? min(0.99, Double(b) / Double(volUsed)) : nil
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.scannedCount = c; self.scannedBytes = b; self.scanFraction = frac
+                }
+            }
+            DiskScopeScanner.scan(path: p, into: sink)
             idx.aggregate()
             let secs = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1e9
 
