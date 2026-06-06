@@ -213,6 +213,22 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(a1 / a5, 3.0, accuracy: 0.01, "area ∝ size")
     }
 
+    /// The TUI drills in by laying out the subtree rooted at the focused folder — not just
+    /// node 0. Lock that any node can be a layout root and its files fill the canvas.
+    func testLayoutOfSubtreeRoot() {
+        let index = builtIndex()
+        let subIdx = index.children(of: 0).first { index.nodes[$0].name == "sub" }!
+        let canvas = Rect(x: 0, y: 0, w: 400, h: 300)
+        let tiles = Treemap.layout(index, root: subIdx, in: canvas, minSide: 1)
+        XCTAssertFalse(tiles.isEmpty)
+        XCTAssertEqual(tiles.first?.node, subIdx, "first tile is the requested root")
+        // Only sub's descendants appear — a.txt (a root-level file) must not.
+        let aIdx = index.children(of: 0).first { index.nodes[$0].name == "a.txt" }!
+        XCTAssertFalse(tiles.contains { $0.node == aIdx }, "siblings of the root aren't laid out")
+        let leafArea = tiles.filter { !$0.isDir }.map(\.rect.area).reduce(0, +)
+        XCTAssertGreaterThan(leafArea, canvas.area * 0.80)
+    }
+
     func testFullTreemapLayout() {
         let index = builtIndex()
         let canvas = Rect(x: 0, y: 0, w: 800, h: 600)

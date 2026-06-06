@@ -23,8 +23,14 @@ func writePNG(_ rgba: [UInt8], width: Int, height: Int, to path: String) {
 }
 
 // diskscope-scan <path> [workers]      — scan a path, report count + wall-clock
+// diskscope-scan --tui <path>          — interactive terminal UI (tree + live treemap)
 // diskscope-scan --watch <path>        — build index, watch live, print reconcile deltas
 //   workers omitted or 1 -> serial scanner; >1 -> parallel worker pool.
+
+// diskscope-scan --tui <path>  — interactive terminal UI (needs a truecolor terminal).
+if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--tui" {
+    runTUI(path: CommandLine.arguments[2])
+}
 
 if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--watch" {
     setvbuf(stdout, nil, _IONBF, 0) // unbuffered: deltas appear live, survive Ctrl-C
