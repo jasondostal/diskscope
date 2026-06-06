@@ -29,7 +29,7 @@ struct ContentView: View {
             model.setMinSide(settings.minTileSize)
             hasFDA = FullDiskAccess.granted()
         }
-        .onChange(of: theme.selectedID) { _, _ in model.setPalette(theme.current.palette) }
+        .onChange(of: theme.paletteRevision) { _, _ in model.setPalette(theme.current.palette) }
         .onChange(of: settings.minTileSize) { _, v in model.setMinSide(v) }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { hasFDA = FullDiskAccess.granted() } // re-check after returning from Settings
@@ -56,6 +56,14 @@ struct ContentView: View {
                 Button { theme.selectedID = t.id } label: {
                     if theme.selectedID == t.id { Label(t.name, systemImage: "checkmark") } else { Text(t.name) }
                 }
+            }
+            Divider()
+            Button { theme.selectedID = Theme.customID } label: {
+                if theme.isCustom { Label("Custom", systemImage: "checkmark") } else { Text("Custom") }
+            }
+            Button("Customize This…") {
+                theme.customize(from: theme.selectedID)
+                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
             }
         } label: { Image(systemName: "paintpalette") }
         .menuStyle(.borderlessButton).frame(width: 34)
