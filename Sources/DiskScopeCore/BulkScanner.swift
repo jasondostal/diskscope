@@ -61,6 +61,77 @@ public enum DiskScopeScanner {
         scanRoot(path: path, rootToken: rootToken, into: sink)
     }
 
+    /// Graft a subtree under an existing parent token (the subtree root is named by its
+    /// basename, not full path). Used by live reconcile when a new directory appears.
+    public static func scanSubtree(path: String, parent: Int, into sink: ScanSink) {
+        let base = String(path.split(separator: "/").last ?? Substring(path))
+        let rootToken = sink.directory(parent: parent, name: base, allocSize: 0)
+        scanRoot(path: path, rootToken: rootToken, into: sink)
+    }
+
+    /// One entry in a single directory level (no recursion).
+    public struct Entry: Sendable {
+        public let name: String
+        public let isDir: Bool
+        public let allocSize: UInt64
+    }
+
+    /// Scan exactly one directory level — the primitive for reconcile() diffing.
+    /// Returns nil if the directory can't be opened (deleted / unreadable).
+    public static func scanLevel(path: String) -> [Entry]? {
+        let fd = open(path, O_RDONLY | O_DIRECTORY)
+        if fd < 0 { return nil }
+        defer { close(fd) }
+
+        let bitReturned = UInt32(truncatingIfNeeded: ATTR_CMN_RETURNED_ATTRS)
+        let bitName = UInt32(truncatingIfNeeded: ATTR_CMN_NAME)
+        let bitObjType = UInt32(truncatingIfNeeded: ATTR_CMN_OBJTYPE)
+        let bitAlloc = UInt32(truncatingIfNeeded: ATTR_FILE_ALLOCSIZE)
+
+        var attrList = attrlist()
+        attrList.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
+        attrList.commonattr = bitReturned | bitName | bitObjType
+        attrList.fileattr = bitAlloc
+
+        let buf = UnsafeMutableRawPointer.allocate(byteCount: bufferSize, alignment: 8)
+        defer { buf.deallocate() }
+
+        var entries: [Entry] = []
+        while true {
+            let count = getattrlistbulk(fd, &attrList, buf, bufferSize, 0)
+            if count <= 0 { break }
+            var entry = buf
+            for _ in 0..<count {
+                let len = entry.loadUnaligned(fromByteOffset: 0, as: UInt32.self)
+                var cursor = 4
+                let returnedCommon = entry.loadUnaligned(fromByteOffset: cursor, as: UInt32.self)
+                let returnedFile = entry.loadUnaligned(fromByteOffset: cursor + 12, as: UInt32.self)
+                cursor += 20
+                var name = ""
+                var objType: UInt32 = 0
+                var allocSize: UInt64 = 0
+                if returnedCommon & bitName != 0 {
+                    let nameOffset = entry.loadUnaligned(fromByteOffset: cursor, as: Int32.self)
+                    let namePtr = entry.advanced(by: cursor + Int(nameOffset))
+                    name = String(cString: namePtr.assumingMemoryBound(to: CChar.self))
+                    cursor += 8
+                }
+                if returnedCommon & bitObjType != 0 {
+                    objType = entry.loadUnaligned(fromByteOffset: cursor, as: UInt32.self)
+                    cursor += 4
+                }
+                if returnedFile & bitAlloc != 0 {
+                    let alloc = entry.loadUnaligned(fromByteOffset: cursor, as: off_t.self)
+                    allocSize = UInt64(max(0, alloc))
+                    cursor += 8
+                }
+                entries.append(Entry(name: name, isDir: objType == VDIR, allocSize: allocSize))
+                entry = entry.advanced(by: Int(len))
+            }
+        }
+        return entries
+    }
+
     private static func scanRoot(path: String, rootToken: Int, into sink: ScanSink) {
         let fd = open(path, O_RDONLY | O_DIRECTORY)
         if fd < 0 { sink.unreadable(); return }

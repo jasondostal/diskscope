@@ -72,6 +72,50 @@ do {
     DiskScopeScanner.scan(path: "/no/such/path-\(UUID().uuidString)", into: empty)
     check(empty.unreadableCount == 1, "one unreadable for a missing root — got \(empty.unreadableCount)")
 
+    // ---- Live reconcile: the Phase 1 bar (create / rename / delete reflected) ----
+    section("reconcile: CREATE a new file")
+    let live = FileIndex()
+    DiskScopeScanner.scan(path: root.path, into: live)
+    let baseFiles = live.fileCount
+    try Data(count: 300).write(to: root.appendingPathComponent("new.txt"))
+    var d = live.reconcile(directoryPath: root.path)
+    check(d == ReconcileDelta(added: 1, removed: 0, updated: 0), "create → +1 added — got \(d)")
+    check(live.search("new.txt").count == 1, "new.txt now searchable")
+    check(live.fileCount == baseFiles + 1, "file count +1")
+
+    section("reconcile: DELETE a file")
+    try fm.removeItem(at: root.appendingPathComponent("a.txt"))
+    d = live.reconcile(directoryPath: root.path)
+    check(d == ReconcileDelta(added: 0, removed: 1, updated: 0), "delete → 1 removed — got \(d)")
+    check(live.search("a.txt").isEmpty, "a.txt no longer searchable")
+
+    section("reconcile: RENAME a file")
+    try fm.moveItem(at: root.appendingPathComponent("empty.txt"),
+                    to: root.appendingPathComponent("renamed.txt"))
+    d = live.reconcile(directoryPath: root.path)
+    check(d.added == 1 && d.removed == 1, "rename → +1 / -1 — got \(d)")
+    check(live.search("empty.txt").isEmpty && live.search("renamed.txt").count == 1, "rename reflected")
+
+    section("reconcile: CREATE a nested directory subtree (graft)")
+    let newDir = root.appendingPathComponent("freshdir")
+    try fm.createDirectory(at: newDir, withIntermediateDirectories: true)
+    try Data(count: 999).write(to: newDir.appendingPathComponent("nested.bin"))
+    d = live.reconcile(directoryPath: root.path)
+    check(d.added == 1, "new dir grafted as one add at this level — got \(d)")
+    check(live.search("nested.bin").count == 1, "nested file inside grafted subtree is searchable")
+    live.aggregate()
+    check(live.nodes[0].totalSize >= 999, "aggregate picks up grafted subtree size")
+
+    section("reconcile: DELETE a whole subtree")
+    try fm.removeItem(at: root.appendingPathComponent("sub")) // had b.txt + deep/c.txt
+    d = live.reconcile(directoryPath: root.path)
+    check(d.removed == 1, "subtree removed as one tombstone at this level — got \(d)")
+    check(live.search("b.txt").isEmpty && live.search("c.txt").isEmpty, "whole subtree gone from search")
+
+    section("reconcile: UPDATE detection is idempotent")
+    let before = live.reconcile(directoryPath: root.path)
+    check(before == ReconcileDelta(), "re-reconcile with no fs change → no-op — got \(before)")
+
 } catch {
     print("fixture setup failed: \(error)")
     failures += 1

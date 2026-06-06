@@ -1,10 +1,41 @@
 import Foundation
 import DiskScopeCore
 
-// Phase 0 spike: scan a path, report how fast.
-//   diskscope-scan <path> [workers]
-// workers omitted or 1 -> serial scanner; >1 -> parallel worker pool.
-//   diskscope-scan /System/Volumes/Data 18
+// diskscope-scan <path> [workers]      — scan a path, report count + wall-clock
+// diskscope-scan --watch <path>        — build index, watch live, print reconcile deltas
+//   workers omitted or 1 -> serial scanner; >1 -> parallel worker pool.
+
+if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--watch" {
+    setvbuf(stdout, nil, _IONBF, 0) // unbuffered: deltas appear live, survive Ctrl-C
+    // FSEvents reports canonical (symlink-resolved) paths, so the index must be keyed on
+    // the canonical root too — else every reconcile lookup misses (/tmp -> /private/tmp).
+    var rbuf = [CChar](repeating: 0, count: Int(PATH_MAX))
+    let root = realpath(CommandLine.arguments[2], &rbuf) != nil
+        ? String(cString: rbuf) : CommandLine.arguments[2]
+    let index = FileIndex()
+    let t0 = DispatchTime.now()
+    DiskScopeScanner.scan(path: root, into: index)
+    index.aggregate()
+    let secs = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1e9
+    print("indexed \(index.count) entries in \(String(format: "%.2f", secs))s — watching \(root)")
+    print("(touch/create/delete files under it; Ctrl-C to stop)\n")
+
+    let watcher = FSEventsWatcher(roots: [root]) { dirs, deep in
+        for dir in dirs {
+            let d = index.reconcile(directoryPath: dir)
+            if d.changed {
+                print("Δ \(dir)  +\(d.added) -\(d.removed) ~\(d.updated)   [now \(index.count) entries]")
+            }
+        }
+        _ = deep // (recursive subtree reconcile: a later refinement)
+    }
+    guard watcher.start() else {
+        FileHandle.standardError.write("failed to start FSEvents stream (Full Disk Access?)\n".data(using: .utf8)!)
+        exit(1)
+    }
+    RunLoop.main.run()
+}
+
 let path = CommandLine.arguments.count > 1
     ? CommandLine.arguments[1]
     : FileManager.default.homeDirectoryForCurrentUser.path

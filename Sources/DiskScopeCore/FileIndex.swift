@@ -11,6 +11,18 @@ public struct IndexNode {
     public var ownSize: UInt64     // a file's allocated bytes; 0 for directories
     public var totalSize: UInt64 = 0 // subtree sum, filled by aggregate()
     public var isDir: Bool
+    public var deleted: Bool = false // tombstone — live reconcile removes by marking
+}
+
+/// What a single reconcile changed — for logging / Live-Wire UI deltas.
+public struct ReconcileDelta: Sendable, Equatable {
+    public var added = 0
+    public var removed = 0
+    public var updated = 0
+    public init(added: Int = 0, removed: Int = 0, updated: Int = 0) {
+        self.added = added; self.removed = removed; self.updated = updated
+    }
+    public var changed: Bool { added + removed + updated > 0 }
 }
 
 public struct SearchResult {
@@ -33,16 +45,27 @@ public final class FileIndex: ScanSink {
     public private(set) var nodes: [IndexNode] = []
     public private(set) var unreadableCount = 0
 
+    // Directory path <-> node index, maintained during build so live reconcile can find
+    // the node for a changed directory in O(1). Only directories are tracked (far fewer
+    // than files, and reconcile always targets a directory).
+    private var dirPath: [Int: String] = [:]
+    private var pathToDir: [String: Int] = [:]
+
     public init() {}
 
-    public var count: Int { nodes.count }
-    public var fileCount: Int { nodes.lazy.filter { !$0.isDir }.count }
-    public var dirCount: Int { nodes.lazy.filter { $0.isDir }.count }
+    public var count: Int { nodes.lazy.filter { !$0.deleted }.count }
+    public var fileCount: Int { nodes.lazy.filter { !$0.isDir && !$0.deleted }.count }
+    public var dirCount: Int { nodes.lazy.filter { $0.isDir && !$0.deleted }.count }
 
     // MARK: - ScanSink (build path)
 
     public func directory(parent: Int, name: String, allocSize: UInt64) -> Int {
-        append(IndexNode(name: name, parent: Int32(parent), ownSize: 0, isDir: true), parent: parent)
+        let idx = append(IndexNode(name: name, parent: Int32(parent), ownSize: 0, isDir: true), parent: parent)
+        // Root (parent -1) carries the full scanned path as its name; children compose.
+        let full = (parent >= 0 ? (dirPath[parent].map { $0 + "/" + name }) : name) ?? name
+        dirPath[idx] = full
+        pathToDir[full] = idx
+        return idx
     }
 
     public func file(parent: Int, name: String, allocSize: UInt64) {
@@ -69,21 +92,102 @@ public final class FileIndex: ScanSink {
     /// Roll up each subtree's total allocated size. One reverse pass works because the
     /// scanner emits every parent before its children, so parent index < child index.
     public func aggregate() {
-        for i in nodes.indices { nodes[i].totalSize = nodes[i].ownSize }
+        for i in nodes.indices { nodes[i].totalSize = nodes[i].deleted ? 0 : nodes[i].ownSize }
         var i = nodes.count - 1
         while i > 0 {
-            let p = Int(nodes[i].parent)
-            if p >= 0 { nodes[p].totalSize += nodes[i].totalSize }
+            if !nodes[i].deleted {
+                let p = Int(nodes[i].parent)
+                if p >= 0 { nodes[p].totalSize += nodes[i].totalSize }
+            }
             i -= 1
         }
     }
 
-    /// Immediate children of a node, as index values (for treemap drill-down).
+    /// Immediate (live) children of a node, as index values (for treemap drill-down).
     public func children(of index: Int) -> [Int] {
         var out: [Int] = []
         var c = nodes[index].firstChild
-        while c >= 0 { out.append(Int(c)); c = nodes[Int(c)].nextSibling }
+        while c >= 0 {
+            let i = Int(c)
+            if !nodes[i].deleted { out.append(i) }
+            c = nodes[i].nextSibling
+        }
         return out
+    }
+
+    // MARK: - Live reconcile (Phase 1 — FSEvents patch target)
+
+    /// Re-scan one directory level and patch the index to match: add new entries
+    /// (grafting whole subtrees for new directories), tombstone vanished ones, update
+    /// changed file sizes. This is the deterministic unit FSEvents triggers. Idempotent:
+    /// reconciling an unchanged directory is a no-op. Re-run aggregate() afterward to
+    /// refresh treemap totals.
+    @discardableResult
+    public func reconcile(directoryPath: String) -> ReconcileDelta {
+        guard let dnode = pathToDir[directoryPath] else { return ReconcileDelta() }
+
+        guard let fresh = DiskScopeScanner.scanLevel(path: directoryPath) else {
+            // The directory itself is gone — tombstone it (its parent's reconcile will
+            // also unlink it, but doing it here keeps a direct event correct).
+            tombstone(dnode)
+            return ReconcileDelta(added: 0, removed: 1, updated: 0)
+        }
+
+        // Live children by name.
+        var existing: [String: Int] = [:]
+        for i in children(of: dnode) { existing[nodes[i].name] = i }
+
+        var delta = ReconcileDelta()
+        var seen = Set<String>()
+        for e in fresh {
+            seen.insert(e.name)
+            if let i = existing[e.name] {
+                if nodes[i].isDir == e.isDir {
+                    if !e.isDir && nodes[i].ownSize != e.allocSize {
+                        nodes[i].ownSize = e.allocSize
+                        delta.updated += 1
+                    }
+                } else {
+                    // A name flipped file<->dir: remove the old, add the new.
+                    tombstone(i); delta.removed += 1
+                    addEntry(e, parent: dnode, parentPath: directoryPath, delta: &delta)
+                }
+            } else {
+                addEntry(e, parent: dnode, parentPath: directoryPath, delta: &delta)
+            }
+        }
+        for (name, i) in existing where !seen.contains(name) {
+            tombstone(i); delta.removed += 1
+        }
+        return delta
+    }
+
+    private func addEntry(_ e: DiskScopeScanner.Entry, parent: Int, parentPath: String, delta: inout ReconcileDelta) {
+        if e.isDir {
+            // Graft the whole new subtree under `parent`.
+            DiskScopeScanner.scanSubtree(path: parentPath + "/" + e.name, parent: parent, into: self)
+        } else {
+            file(parent: parent, name: e.name, allocSize: e.allocSize)
+        }
+        delta.added += 1
+    }
+
+    /// Mark a node (and its subtree) deleted, and drop its directory path mappings so a
+    /// later re-create re-indexes cleanly. We tombstone rather than unlink to keep the
+    /// arena's parent-before-child ordering intact for aggregate().
+    private func tombstone(_ index: Int) {
+        if nodes[index].deleted { return }
+        nodes[index].deleted = true
+        if let p = dirPath[index] {
+            pathToDir.removeValue(forKey: p)
+            dirPath.removeValue(forKey: index)
+        }
+        var c = nodes[index].firstChild
+        while c >= 0 {
+            let next = nodes[Int(c)].nextSibling
+            tombstone(Int(c))
+            c = next
+        }
     }
 
     // MARK: - Search (v1.0)
@@ -95,7 +199,7 @@ public final class FileIndex: ScanSink {
         guard !needle.isEmpty else { return [] }
         var out: [SearchResult] = []
         for i in nodes.indices {
-            if nodes[i].name.lowercased().contains(needle) {
+            if !nodes[i].deleted, nodes[i].name.lowercased().contains(needle) {
                 out.append(result(for: i))
                 if out.count >= limit { break }
             }
