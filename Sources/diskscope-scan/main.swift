@@ -108,6 +108,51 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--cushion" {
     exit(0)
 }
 
+// diskscope-scan --term <path>  — render the cushioned treemap in the terminal itself,
+// via Unicode half-blocks (▀) + 24-bit truecolor: two vertical pixels per character cell.
+// Same engine, same cushion renderer as the GUI — just a different output target.
+if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--term" {
+    let target = CommandLine.arguments[2]
+    var ws = winsize()
+    let cols: Int, rows: Int
+    if ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0, ws.ws_col > 0 {
+        cols = Int(ws.ws_col); rows = Int(ws.ws_row)
+    } else {
+        cols = 100; rows = 44
+    }
+    let W = cols, H = max(2, (rows - 1) * 2) // one row reserved for the caption
+
+    let index = FileIndex()
+    DiskScopeScanner.scan(path: target, into: index)
+    index.aggregate()
+    let tiles = Treemap.layout(index, root: 0, in: Rect(x: 0, y: 0, w: Double(W), h: Double(H)),
+                               minSide: 1, cushionHeight: 0.42)
+    let rgba = Treemap.renderCushionRGBA(tiles: tiles, width: W, height: H, ambient: 0.58) { node in
+        FilePalette.srgb(forExt: cliExt(index.nodes[node].name))
+    }
+    func px(_ x: Int, _ y: Int) -> (Int, Int, Int) {
+        let i = (y * W + x) * 4
+        return (Int(rgba[i]), Int(rgba[i + 1]), Int(rgba[i + 2]))
+    }
+
+    var out = ""
+    var y = 0
+    while y + 1 < H {
+        for x in 0..<W {
+            let (tr, tg, tb) = px(x, y)
+            let (br, bg, bb) = px(x, y + 1)
+            out += "\u{1b}[38;2;\(tr);\(tg);\(tb)m\u{1b}[48;2;\(br);\(bg);\(bb)m▀"
+        }
+        out += "\u{1b}[0m\n"
+        y += 2
+    }
+    let total = Int64(index.nodes.first?.totalSize ?? 0)
+    let sizeStr = ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
+    out += "\u{1b}[0m \(target)  —  \(index.fileCount) files · \(sizeStr)\n"
+    print(out, terminator: "")
+    exit(0)
+}
+
 let path = CommandLine.arguments.count > 1
     ? CommandLine.arguments[1]
     : FileManager.default.homeDirectoryForCurrentUser.path
