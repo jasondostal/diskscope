@@ -157,6 +157,21 @@ final class TreemapModel: ObservableObject {
     /// Root of the directory tree (the scanned folder), or nil before a scan completes.
     func makeRootNode() -> TreeNode? { index.map { TreeNode(id: 0, index: $0) } }
 
+    /// Node ids from the root down to (and including) `node` — for expanding/revealing a
+    /// selection in the tree.
+    func ancestors(of node: Int) -> [Int] {
+        guard let index, node >= 0, node < index.nodes.count else { return [] }
+        var chain: [Int] = []
+        var cur = node
+        while cur >= 0 {
+            chain.append(cur)
+            let p = Int(index.nodes[cur].parent)
+            if p < 0 { break }
+            cur = p
+        }
+        return chain.reversed()
+    }
+
     // MARK: - File actions
 
     func url(for node: Int) -> URL? {

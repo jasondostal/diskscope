@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "DiskScope",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS(.v14)],
     targets: [
         // The index engine's first organ: the bulk filesystem scanner.
         // Real, tested module — both v1.0 search and v1.1 treemap are clients of this.

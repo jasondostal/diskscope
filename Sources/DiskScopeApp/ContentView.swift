@@ -113,20 +113,52 @@ struct ContentView: View {
 struct TreeListView: View {
     @ObservedObject var model: TreemapModel
     @Binding var selected: Int?
+    @State private var expanded: Set<Int> = [0]
 
     var body: some View {
         if let root = model.makeRootNode() {
-            List(selection: $selected) {
-                OutlineGroup([root], children: \.children) { node in
-                    TreeRow(node: node, total: model.totalSize)
-                        .tag(node.id)
-                        .contextMenu { fileMenu(model, node.id) }
+            ScrollViewReader { proxy in
+                List(selection: $selected) {
+                    NodeRows(node: root, model: model, expanded: $expanded, depth: 0)
+                }
+                .listStyle(.inset)
+                .environment(\.defaultMinListRowHeight, 22)
+                .onChange(of: model.path) { _, _ in expanded = [0] }
+                .onChange(of: selected) { _, sel in
+                    guard let sel else { return }
+                    // Reveal: expand the selection's ancestor folders, then scroll to it.
+                    for ancestor in model.ancestors(of: sel).dropLast() { expanded.insert(ancestor) }
+                    DispatchQueue.main.async {
+                        withAnimation(.easeInOut(duration: 0.15)) { proxy.scrollTo(sel, anchor: .center) }
+                    }
                 }
             }
-            .listStyle(.sidebar)
-            .environment(\.defaultMinListRowHeight, 22)
         } else {
             Color.clear
+        }
+    }
+}
+
+/// Recursive outline row with explicit expansion control (so the treemap can reveal a path).
+struct NodeRows: View {
+    let node: TreeNode
+    @ObservedObject var model: TreemapModel
+    @Binding var expanded: Set<Int>
+    let depth: Int
+
+    var body: some View {
+        TreeRow(node: node, total: model.totalSize, depth: depth,
+                isExpanded: expanded.contains(node.id)) {
+            if expanded.contains(node.id) { expanded.remove(node.id) } else { expanded.insert(node.id) }
+        }
+        .tag(node.id)
+        .id(node.id)
+        .contextMenu { fileMenu(model, node.id) }
+
+        if node.isDir, expanded.contains(node.id), let kids = node.children {
+            ForEach(kids) { child in
+                NodeRows(node: child, model: model, expanded: $expanded, depth: depth + 1)
+            }
         }
     }
 }
@@ -134,11 +166,25 @@ struct TreeListView: View {
 struct TreeRow: View {
     let node: TreeNode
     let total: UInt64
+    let depth: Int
+    let isExpanded: Bool
+    let onToggle: () -> Void
 
     private var fraction: Double { total > 0 ? Double(node.size) / Double(total) : 0 }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
+            Color.clear.frame(width: CGFloat(depth) * 12)
+            if node.isDir {
+                Button(action: onToggle) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
+                        .frame(width: 12)
+                }
+                .buttonStyle(.plain)
+            } else {
+                Color.clear.frame(width: 12)
+            }
             Image(systemName: node.isDir ? "folder.fill" : iconForExt(extOf(node.name)))
                 .font(.caption2)
                 .foregroundStyle(node.isDir ? Color.secondary : categoryColor(FilePalette.category(forExt: extOf(node.name))))
@@ -148,7 +194,6 @@ struct TreeRow: View {
             Text(String(format: "%.1f%%", fraction * 100))
                 .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
                 .frame(width: 42, alignment: .trailing)
-            // Files count (subtree) — blank for individual files.
             Text(node.isDir ? node.subtreeFiles.formatted() : "")
                 .font(.caption2).monospacedDigit().foregroundStyle(.tertiary)
                 .frame(width: 52, alignment: .trailing)
