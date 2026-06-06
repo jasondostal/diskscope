@@ -74,6 +74,17 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(rootKids, ["a.txt", "empty.txt", "sub"])
     }
 
+    func testParallelBuildMatchesSerial() {
+        let serial = builtIndex()
+        let par = ParallelIndexBuilder.build(root: root.path, workers: 4)
+        par.aggregate()
+        XCTAssertEqual(par.fileCount, serial.fileCount, "same file count")
+        XCTAssertEqual(par.dirCount, serial.dirCount, "same dir count")
+        XCTAssertEqual(par.nodes[0].totalSize, serial.nodes[0].totalSize, "same total size")
+        XCTAssertEqual(Set(par.search("txt").map(\.path)),
+                       Set(serial.search("txt").map(\.path)), "same files found")
+    }
+
     func testSubtreeCounts() {
         let index = builtIndex()
         // root: files a, empty, b, c (4); items a, empty, sub, deep, b, c (6)

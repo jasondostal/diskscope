@@ -3,28 +3,6 @@ import Darwin
 import CoreGraphics
 import DiskScopeCore
 
-/// Decorator sink: forwards every event to the real index while counting items/bytes and
-/// firing a throttled progress callback — so the scan can show live progress, not a spinner.
-final class ProgressSink: ScanSink {
-    private let inner: ScanSink
-    private let onProgress: (Int, UInt64) -> Void
-    private var count = 0
-    private var bytes: UInt64 = 0
-    private let interval = 8192
-
-    init(inner: ScanSink, onProgress: @escaping (Int, UInt64) -> Void) {
-        self.inner = inner; self.onProgress = onProgress
-    }
-    func directory(parent: Int, name: String, allocSize: UInt64) -> Int {
-        count += 1; tick(); return inner.directory(parent: parent, name: name, allocSize: allocSize)
-    }
-    func file(parent: Int, name: String, allocSize: UInt64) {
-        count += 1; bytes += allocSize; tick(); inner.file(parent: parent, name: name, allocSize: allocSize)
-    }
-    func unreadable() { inner.unreadable() }
-    private func tick() { if count % interval == 0 { onProgress(count, bytes) } }
-}
-
 /// Used bytes on the volume containing `path` — the denominator for a scan percentage.
 func volumeUsedBytes(_ path: String) -> UInt64 {
     var s = statfs()
@@ -64,15 +42,13 @@ final class TreemapModel: ObservableObject {
         let t0 = DispatchTime.now()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let volUsed = volumeUsedBytes(p)
-            let idx = FileIndex()
-            let sink = ProgressSink(inner: idx) { c, b in
+            let idx = ParallelIndexBuilder.build(root: p) { c, b in
                 let frac = volUsed > 0 ? min(0.99, Double(b) / Double(volUsed)) : nil
                 DispatchQueue.main.async {
                     guard let self else { return }
                     self.scannedCount = c; self.scannedBytes = b; self.scanFraction = frac
                 }
             }
-            DiskScopeScanner.scan(path: p, into: sink)
             idx.aggregate()
             let secs = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1e9
 

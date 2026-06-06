@@ -153,6 +153,24 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--term" {
     exit(0)
 }
 
+// diskscope-scan --index <path> [workers]  — benchmark serial vs parallel INDEX build
+if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--index" {
+    let target = CommandLine.arguments[2]
+    let w = CommandLine.arguments.count > 3 ? (Int(CommandLine.arguments[3]) ?? ParallelIndexBuilder.performanceCoreCount()) : ParallelIndexBuilder.performanceCoreCount()
+
+    func time(_ label: String, _ body: () -> FileIndex) {
+        let t0 = DispatchTime.now()
+        let idx = body()
+        idx.aggregate()
+        let secs = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1e9
+        print("\(label): \(idx.fileCount.formatted()) files, \(idx.dirCount.formatted()) dirs in \(String(format: "%.2f", secs))s")
+    }
+    print("P-cores: \(ParallelIndexBuilder.performanceCoreCount())  ·  parallel workers: \(w)")
+    time("serial  ") { let i = FileIndex(); DiskScopeScanner.scan(path: target, into: i); return i }
+    time("parallel") { ParallelIndexBuilder.build(root: target, workers: w) }
+    exit(0)
+}
+
 let path = CommandLine.arguments.count > 1
     ? CommandLine.arguments[1]
     : FileManager.default.homeDirectoryForCurrentUser.path
