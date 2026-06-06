@@ -5,8 +5,8 @@ import Darwin
 /// id for that dir) which the scanner threads back as `parent` for that dir's children —
 /// so the sink can rebuild the tree without the scanner knowing anything about trees.
 public protocol ScanSink: AnyObject {
-    func directory(parent: Int, name: String, allocSize: UInt64) -> Int
-    func file(parent: Int, name: String, allocSize: UInt64)
+    func directory(parent: Int, name: String, allocSize: UInt64, modTime: Int64, createTime: Int64) -> Int
+    func file(parent: Int, name: String, allocSize: UInt64, modTime: Int64, createTime: Int64)
     func unreadable()
 }
 
@@ -15,10 +15,10 @@ public protocol ScanSink: AnyObject {
 public final class TallySink: ScanSink {
     public var stats = ScanStats()
     public init() {}
-    public func directory(parent: Int, name: String, allocSize: UInt64) -> Int {
+    public func directory(parent: Int, name: String, allocSize: UInt64, modTime: Int64, createTime: Int64) -> Int {
         stats.dirs += 1; stats.allocBytes += allocSize; return 0
     }
-    public func file(parent: Int, name: String, allocSize: UInt64) {
+    public func file(parent: Int, name: String, allocSize: UInt64, modTime: Int64, createTime: Int64) {
         stats.files += 1; stats.allocBytes += allocSize
     }
     public func unreadable() { stats.errors += 1 }
@@ -50,14 +50,14 @@ public enum DiskScopeScanner {
     public static func scan(path: String) -> ScanStats {
         let sink = TallySink()
         // The root itself isn't an "entry" of anything; count it as a directory.
-        _ = sink.directory(parent: -1, name: path, allocSize: 0)
+        _ = sink.directory(parent: -1, name: path, allocSize: 0, modTime: 0, createTime: 0)
         scanRoot(path: path, rootToken: 0, into: sink)
         return sink.stats
     }
 
     /// Indexing scan: drive an arbitrary sink. The sink assigns the root its own token.
     public static func scan(path: String, into sink: ScanSink) {
-        let rootToken = sink.directory(parent: -1, name: path, allocSize: 0)
+        let rootToken = sink.directory(parent: -1, name: path, allocSize: 0, modTime: 0, createTime: 0)
         scanRoot(path: path, rootToken: rootToken, into: sink)
     }
 
@@ -65,7 +65,7 @@ public enum DiskScopeScanner {
     /// basename, not full path). Used by live reconcile when a new directory appears.
     public static func scanSubtree(path: String, parent: Int, into sink: ScanSink) {
         let base = String(path.split(separator: "/").last ?? Substring(path))
-        let rootToken = sink.directory(parent: parent, name: base, allocSize: 0)
+        let rootToken = sink.directory(parent: parent, name: base, allocSize: 0, modTime: 0, createTime: 0)
         scanRoot(path: path, rootToken: rootToken, into: sink)
     }
 
@@ -74,6 +74,9 @@ public enum DiskScopeScanner {
         public let name: String
         public let isDir: Bool
         public let allocSize: UInt64
+        /// Epoch seconds; 0 = unknown. Modify (mtime) and create (crtime / birthtime).
+        public let modTime: Int64
+        public let createTime: Int64
     }
 
     /// One directory level plus the directory's own (device, inode) identity — the latter
@@ -99,11 +102,17 @@ public enum DiskScopeScanner {
         let bitReturned = UInt32(truncatingIfNeeded: ATTR_CMN_RETURNED_ATTRS)
         let bitName = UInt32(truncatingIfNeeded: ATTR_CMN_NAME)
         let bitObjType = UInt32(truncatingIfNeeded: ATTR_CMN_OBJTYPE)
+        let bitCrTime = UInt32(truncatingIfNeeded: ATTR_CMN_CRTIME)
+        let bitModTime = UInt32(truncatingIfNeeded: ATTR_CMN_MODTIME)
         let bitAlloc = UInt32(truncatingIfNeeded: ATTR_FILE_ALLOCSIZE)
 
         var attrList = attrlist()
         attrList.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
-        attrList.commonattr = bitReturned | bitName | bitObjType
+        // getattrlistbulk packs returned attrs in canonical bitmap order BY GROUP: all
+        // commonattr (in bit order: NAME 0x1, OBJTYPE 0x8, CRTIME 0x200, MODTIME 0x400),
+        // THEN fileattr (ALLOCSIZE). The cursor walk below must follow this exact order —
+        // not the order the fields are declared — or every offset after the misread shifts.
+        attrList.commonattr = bitReturned | bitName | bitObjType | bitCrTime | bitModTime
         attrList.fileattr = bitAlloc
 
         let buf = UnsafeMutableRawPointer.allocate(byteCount: bufferSize, alignment: 8)
@@ -123,6 +132,8 @@ public enum DiskScopeScanner {
                 var name = ""
                 var objType: UInt32 = 0
                 var allocSize: UInt64 = 0
+                var modTime: Int64 = 0
+                var createTime: Int64 = 0
                 if returnedCommon & bitName != 0 {
                     let nameOffset = entry.loadUnaligned(fromByteOffset: cursor, as: Int32.self)
                     let namePtr = entry.advanced(by: cursor + Int(nameOffset))
@@ -133,12 +144,21 @@ public enum DiskScopeScanner {
                     objType = entry.loadUnaligned(fromByteOffset: cursor, as: UInt32.self)
                     cursor += 4
                 }
+                if returnedCommon & bitCrTime != 0 {
+                    createTime = Int64(entry.loadUnaligned(fromByteOffset: cursor, as: timespec.self).tv_sec)
+                    cursor += MemoryLayout<timespec>.stride
+                }
+                if returnedCommon & bitModTime != 0 {
+                    modTime = Int64(entry.loadUnaligned(fromByteOffset: cursor, as: timespec.self).tv_sec)
+                    cursor += MemoryLayout<timespec>.stride
+                }
                 if returnedFile & bitAlloc != 0 {
                     let alloc = entry.loadUnaligned(fromByteOffset: cursor, as: off_t.self)
                     allocSize = UInt64(max(0, alloc))
                     cursor += 8
                 }
-                entries.append(Entry(name: name, isDir: objType == VDIR, allocSize: allocSize))
+                entries.append(Entry(name: name, isDir: objType == VDIR, allocSize: allocSize,
+                                     modTime: modTime, createTime: createTime))
                 entry = entry.advanced(by: Int(len))
             }
         }
@@ -157,11 +177,17 @@ public enum DiskScopeScanner {
         let bitReturned = UInt32(truncatingIfNeeded: ATTR_CMN_RETURNED_ATTRS)
         let bitName = UInt32(truncatingIfNeeded: ATTR_CMN_NAME)
         let bitObjType = UInt32(truncatingIfNeeded: ATTR_CMN_OBJTYPE)
+        let bitCrTime = UInt32(truncatingIfNeeded: ATTR_CMN_CRTIME)
+        let bitModTime = UInt32(truncatingIfNeeded: ATTR_CMN_MODTIME)
         let bitAlloc = UInt32(truncatingIfNeeded: ATTR_FILE_ALLOCSIZE)
 
         var attrList = attrlist()
         attrList.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
-        attrList.commonattr = bitReturned | bitName | bitObjType
+        // getattrlistbulk packs returned attrs in canonical bitmap order BY GROUP: all
+        // commonattr (in bit order: NAME 0x1, OBJTYPE 0x8, CRTIME 0x200, MODTIME 0x400),
+        // THEN fileattr (ALLOCSIZE). The cursor walk below must follow this exact order —
+        // not the order the fields are declared — or every offset after the misread shifts.
+        attrList.commonattr = bitReturned | bitName | bitObjType | bitCrTime | bitModTime
         attrList.fileattr = bitAlloc
 
         let buf = UnsafeMutableRawPointer.allocate(byteCount: bufferSize, alignment: 8)
@@ -190,6 +216,8 @@ public enum DiskScopeScanner {
                 var name = ""
                 var objType: UInt32 = 0
                 var allocSize: UInt64 = 0
+                var modTime: Int64 = 0
+                var createTime: Int64 = 0
 
                 if returnedCommon & bitName != 0 {
                     // attrreference_t { int32 dataoffset; uint32 length } — name bytes live
@@ -203,6 +231,14 @@ public enum DiskScopeScanner {
                     objType = entry.loadUnaligned(fromByteOffset: cursor, as: UInt32.self)
                     cursor += 4
                 }
+                if returnedCommon & bitCrTime != 0 {
+                    createTime = Int64(entry.loadUnaligned(fromByteOffset: cursor, as: timespec.self).tv_sec)
+                    cursor += MemoryLayout<timespec>.stride
+                }
+                if returnedCommon & bitModTime != 0 {
+                    modTime = Int64(entry.loadUnaligned(fromByteOffset: cursor, as: timespec.self).tv_sec)
+                    cursor += MemoryLayout<timespec>.stride
+                }
                 if returnedFile & bitAlloc != 0 {
                     let alloc = entry.loadUnaligned(fromByteOffset: cursor, as: off_t.self)
                     allocSize = UInt64(max(0, alloc))
@@ -210,10 +246,12 @@ public enum DiskScopeScanner {
                 }
 
                 if objType == VDIR {
-                    let token = sink.directory(parent: parent, name: name, allocSize: allocSize)
+                    let token = sink.directory(parent: parent, name: name, allocSize: allocSize,
+                                               modTime: modTime, createTime: createTime)
                     childDirs.append((name, token))
                 } else {
-                    sink.file(parent: parent, name: name, allocSize: allocSize)
+                    sink.file(parent: parent, name: name, allocSize: allocSize,
+                              modTime: modTime, createTime: createTime)
                 }
 
                 entry = entry.advanced(by: Int(len))

@@ -10,6 +10,7 @@ final class TreeNode: Identifiable {
     let size: UInt64
     let isDir: Bool
     let subtreeFiles: Int32
+    let modTime: Int64   // epoch seconds; 0 = unknown
 
     private let index: FileIndex
 
@@ -22,6 +23,7 @@ final class TreeNode: Identifiable {
         self.isDir = n.isDir
         self.size = n.isDir ? n.totalSize : n.ownSize
         self.subtreeFiles = n.subtreeFiles
+        self.modTime = n.modTime
     }
 
     private var memoChildren: [TreeNode]??

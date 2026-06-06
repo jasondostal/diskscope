@@ -142,6 +142,58 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(index.reconcile(directoryPath: root.path), ReconcileDelta(), "no-op when unchanged")
     }
 
+    // MARK: - Timestamps (mtime/crtime threaded from getattrlistbulk)
+
+    /// Locks the getattrlistbulk buffer packing order: adding the two common-attr timespecs
+    /// must NOT shift the file-attr (allocSize) offset. Exact sizes prove the cursor walk.
+    func testSizesExactAfterAddingTimeAttrs() {
+        let index = builtIndex()
+        func own(_ name: String) -> UInt64 {
+            let i = index.nodes.firstIndex { $0.name == name && !$0.isDir }!
+            return index.nodes[i].ownSize
+        }
+        // Allocated (block-rounded) size ≥ logical; a 100-byte file is one 4K block, etc.
+        // The zero-byte file must allocate zero — the tell-tale that the offset didn't drift.
+        XCTAssertEqual(own("empty.txt"), 0, "0-byte file allocates 0 (offset not drifted)")
+        XCTAssertGreaterThanOrEqual(own("a.txt"), 100)
+        XCTAssertGreaterThanOrEqual(own("b.txt"), 200)
+    }
+
+    func testScanCapturesModTime() throws {
+        // Stamp a known mtime so the assertion is deterministic.
+        let when = Date(timeIntervalSince1970: 1_600_000_000) // 2020-09-13
+        try fm.setAttributes([.modificationDate: when], ofItemAtPath: root.appendingPathComponent("a.txt").path)
+        let index = builtIndex()
+        let i = index.nodes.firstIndex { $0.name == "a.txt" && !$0.isDir }!
+        XCTAssertEqual(index.nodes[i].modTime, 1_600_000_000, "stamped mtime threaded through")
+        // Directories carry their own mtime too (recently created → nonzero).
+        let subIdx = index.children(of: 0).first { index.nodes[$0].name == "sub" }!
+        XCTAssertGreaterThan(index.nodes[subIdx].modTime, 0, "dir mtime captured")
+    }
+
+    func testParallelBuildCapturesSameModTimes() throws {
+        let when = Date(timeIntervalSince1970: 1_600_000_000)
+        try fm.setAttributes([.modificationDate: when], ofItemAtPath: root.appendingPathComponent("a.txt").path)
+        let serial = builtIndex()
+        let par = ParallelIndexBuilder.build(root: root.path); par.aggregate()
+        func mtime(_ idx: FileIndex, _ name: String) -> Int64 {
+            idx.nodes[idx.nodes.firstIndex { $0.name == name && !$0.isDir }!].modTime
+        }
+        XCTAssertEqual(mtime(par, "a.txt"), 1_600_000_000)
+        XCTAssertEqual(mtime(par, "a.txt"), mtime(serial, "a.txt"), "parallel == serial mtime")
+    }
+
+    func testReconcileUpdatesModTime() throws {
+        let index = builtIndex()
+        let i = index.nodes.firstIndex { $0.name == "a.txt" && !$0.isDir }!
+        let old = index.nodes[i].modTime
+        let when = Date(timeIntervalSince1970: 1_700_000_000) // 2023-11-14
+        try fm.setAttributes([.modificationDate: when], ofItemAtPath: root.appendingPathComponent("a.txt").path)
+        XCTAssertNotEqual(old, 1_700_000_000)
+        XCTAssertEqual(index.reconcile(directoryPath: root.path).updated, 1, "mtime change is an update")
+        XCTAssertEqual(index.nodes[i].modTime, 1_700_000_000, "reconcile refreshed mtime")
+    }
+
     // MARK: - Treemap layout
 
     func testSquarifyConservesAreaInBounds() {

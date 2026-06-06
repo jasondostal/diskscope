@@ -158,25 +158,44 @@ struct TreeListView: View {
 
     var body: some View {
         if let root = model.makeRootNode() {
-            ScrollViewReader { proxy in
-                List(selection: $selected) {
-                    NodeRows(node: root, model: model, expanded: $expanded, depth: 0)
-                }
-                .listStyle(.inset)
-                .environment(\.defaultMinListRowHeight, 22)
-                .onChange(of: model.path) { _, _ in expanded = [0] }
-                .onChange(of: selected) { _, sel in
-                    guard let sel else { return }
-                    // Reveal: expand the selection's ancestor folders, then scroll to it.
-                    for ancestor in model.ancestors(of: sel).dropLast() { expanded.insert(ancestor) }
-                    DispatchQueue.main.async {
-                        withAnimation(.easeInOut(duration: 0.15)) { proxy.scrollTo(sel, anchor: .center) }
+            VStack(spacing: 0) {
+                treeHeader
+                Divider().overlay(Color.white.opacity(0.08))
+                ScrollViewReader { proxy in
+                    List(selection: $selected) {
+                        NodeRows(node: root, model: model, expanded: $expanded, depth: 0)
+                    }
+                    .listStyle(.inset)
+                    .environment(\.defaultMinListRowHeight, 22)
+                    .onChange(of: model.path) { _, _ in expanded = [0] }
+                    .onChange(of: selected) { _, sel in
+                        guard let sel else { return }
+                        // Reveal: expand the selection's ancestor folders, then scroll to it.
+                        for ancestor in model.ancestors(of: sel).dropLast() { expanded.insert(ancestor) }
+                        DispatchQueue.main.async {
+                            withAnimation(.easeInOut(duration: 0.15)) { proxy.scrollTo(sel, anchor: .center) }
+                        }
                     }
                 }
             }
         } else {
             Color.clear
         }
+    }
+
+    // Labels the fixed right-side columns; widths mirror TreeRow so they line up.
+    private var treeHeader: some View {
+        HStack(spacing: 6) {
+            Text("Name")
+            Spacer(minLength: 6)
+            Color.clear.frame(width: 46)                       // %-bar
+            Text("%").frame(width: 42, alignment: .trailing)
+            Text("Files").frame(width: 52, alignment: .trailing)
+            Text("Size").frame(width: 70, alignment: .trailing)
+            Text("Modified").frame(width: 88, alignment: .trailing)
+        }
+        .font(.caption2).foregroundStyle(.secondary)
+        .padding(.horizontal, 12).padding(.vertical, 5)
     }
 }
 
@@ -242,6 +261,9 @@ struct TreeRow: View {
             Text(humanSize(node.size))
                 .font(.caption).monospacedDigit().foregroundStyle(.primary)
                 .frame(width: 70, alignment: .trailing)
+            Text(shortDate(node.modTime))
+                .font(.caption2).monospacedDigit().foregroundStyle(.tertiary)
+                .frame(width: 88, alignment: .trailing)
         }
     }
 }

@@ -41,7 +41,9 @@ public enum ParallelIndexBuilder {
         // Serial assembly: rebuild the tree from collected (path -> entries), parent before
         // child, into a real FileIndex. Pure in-memory, no syscalls.
         let index = FileIndex()
-        assemble(path: root, name: root, parent: -1, dir: shared.byPath, into: index)
+        // The scanned root has no parent entry to carry its own timestamps; 0 is fine (it's
+        // shown as the path basename anyway). Child dirs carry their entry's timestamps down.
+        assemble(path: root, name: root, parent: -1, modTime: 0, createTime: 0, dir: shared.byPath, into: index)
         for _ in 0..<shared.errors { index.unreadable() }
         return index
     }
@@ -71,15 +73,19 @@ public enum ParallelIndexBuilder {
     }
 
     private static func assemble(path: String, name: String, parent: Int,
+                                 modTime: Int64, createTime: Int64,
                                  dir: [String: [DiskScopeScanner.Entry]], into index: FileIndex) {
-        let token = index.directory(parent: parent, name: name, allocSize: 0)
+        let token = index.directory(parent: parent, name: name, allocSize: 0,
+                                    modTime: modTime, createTime: createTime)
         guard let entries = dir[path] else { return }
         let prefix = path == "/" ? "/" : path + "/"
         for e in entries {
             if e.isDir {
-                assemble(path: prefix + e.name, name: e.name, parent: token, dir: dir, into: index)
+                assemble(path: prefix + e.name, name: e.name, parent: token,
+                         modTime: e.modTime, createTime: e.createTime, dir: dir, into: index)
             } else {
-                index.file(parent: token, name: e.name, allocSize: e.allocSize)
+                index.file(parent: token, name: e.name, allocSize: e.allocSize,
+                           modTime: e.modTime, createTime: e.createTime)
             }
         }
     }

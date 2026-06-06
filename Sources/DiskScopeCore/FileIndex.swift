@@ -15,6 +15,9 @@ public struct IndexNode {
     // Descendant counts, filled by aggregate() (WinDirStat's "Files" / "Items" columns).
     public var subtreeFiles: Int32 = 0 // files anywhere under this node
     public var subtreeItems: Int32 = 0 // all entries (files + dirs) under this node
+    // Timestamps in epoch seconds; 0 = unknown (root / grafted subtree roots).
+    public var modTime: Int64 = 0      // last content modification (WinDirStat's "Last Change")
+    public var createTime: Int64 = 0   // creation / birth time
 }
 
 /// What a single reconcile changed — for logging / Live-Wire UI deltas.
@@ -62,8 +65,10 @@ public final class FileIndex: ScanSink {
 
     // MARK: - ScanSink (build path)
 
-    public func directory(parent: Int, name: String, allocSize: UInt64) -> Int {
-        let idx = append(IndexNode(name: name, parent: Int32(parent), ownSize: 0, isDir: true), parent: parent)
+    public func directory(parent: Int, name: String, allocSize: UInt64, modTime: Int64, createTime: Int64) -> Int {
+        var node = IndexNode(name: name, parent: Int32(parent), ownSize: 0, isDir: true)
+        node.modTime = modTime; node.createTime = createTime
+        let idx = append(node, parent: parent)
         // Root (parent -1) carries the full scanned path as its name; children compose.
         let full = (parent >= 0 ? (dirPath[parent].map { $0 + "/" + name }) : name) ?? name
         dirPath[idx] = full
@@ -71,8 +76,10 @@ public final class FileIndex: ScanSink {
         return idx
     }
 
-    public func file(parent: Int, name: String, allocSize: UInt64) {
-        _ = append(IndexNode(name: name, parent: Int32(parent), ownSize: allocSize, isDir: false), parent: parent)
+    public func file(parent: Int, name: String, allocSize: UInt64, modTime: Int64, createTime: Int64) {
+        var node = IndexNode(name: name, parent: Int32(parent), ownSize: allocSize, isDir: false)
+        node.modTime = modTime; node.createTime = createTime
+        _ = append(node, parent: parent)
     }
 
     public func unreadable() { unreadableCount += 1 }
@@ -154,8 +161,10 @@ public final class FileIndex: ScanSink {
             seen.insert(e.name)
             if let i = existing[e.name] {
                 if nodes[i].isDir == e.isDir {
-                    if !e.isDir && nodes[i].ownSize != e.allocSize {
+                    if !e.isDir && (nodes[i].ownSize != e.allocSize || nodes[i].modTime != e.modTime) {
                         nodes[i].ownSize = e.allocSize
+                        nodes[i].modTime = e.modTime
+                        nodes[i].createTime = e.createTime
                         delta.updated += 1
                     }
                 } else {
@@ -178,7 +187,7 @@ public final class FileIndex: ScanSink {
             // Graft the whole new subtree under `parent`.
             DiskScopeScanner.scanSubtree(path: parentPath + "/" + e.name, parent: parent, into: self)
         } else {
-            file(parent: parent, name: e.name, allocSize: e.allocSize)
+            file(parent: parent, name: e.name, allocSize: e.allocSize, modTime: e.modTime, createTime: e.createTime)
         }
         delta.added += 1
     }

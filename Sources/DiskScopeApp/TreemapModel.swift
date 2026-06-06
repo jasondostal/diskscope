@@ -275,6 +275,20 @@ func extOf(_ name: String) -> String {
     return String(name[name.index(after: dot)...]).lowercased()
 }
 
+/// Compact absolute date for the tree's Modified column. Cached formatter (DateFormatter
+/// construction is costly and this is called per visible row). "—" for unknown (epoch 0).
+private let shortDateFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.locale = Locale(identifier: "en_US_POSIX")
+    f.dateFormat = "yyyy-MM-dd"
+    return f
+}()
+
+func shortDate(_ epoch: Int64) -> String {
+    guard epoch > 0 else { return "—" }
+    return shortDateFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(epoch)))
+}
+
 /// Human-readable byte size.
 func humanSize(_ bytes: UInt64) -> String {
     let units = ["B", "KB", "MB", "GB", "TB"]
