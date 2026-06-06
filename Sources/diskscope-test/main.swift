@@ -116,6 +116,37 @@ do {
     let before = live.reconcile(directoryPath: root.path)
     check(before == ReconcileDelta(), "re-reconcile with no fs change → no-op — got \(before)")
 
+    // ---- Treemap layout (v1.1 — the WinDirStat view) ----
+    section("treemap: squarify conserves area and stays in bounds")
+    let canvas = Rect(x: 0, y: 0, w: 100, h: 60)
+    let placed = Treemap.squarify(
+        [(node: 1, size: 6), (node: 2, size: 6), (node: 3, size: 4), (node: 4, size: 3), (node: 5, size: 2)],
+        in: canvas)
+    check(placed.count == 5, "all 5 items placed — got \(placed.count)")
+    let placedArea: Double = placed.map(\.rect.area).reduce(0, +)
+    check(abs(placedArea - canvas.area) / canvas.area < 0.001, "placed area ≈ canvas area — got \(placedArea) vs \(canvas.area)")
+    let inBounds = placed.allSatisfy {
+        $0.rect.x >= -0.001 && $0.rect.y >= -0.001 &&
+        $0.rect.x + $0.rect.w <= canvas.w + 0.001 && $0.rect.y + $0.rect.h <= canvas.h + 0.001
+    }
+    check(inBounds, "every cell within the canvas")
+    // Area is proportional to size: node 1 (size 6) cell should be ~3x node 5 (size 2).
+    let a1 = placed.first { $0.node == 1 }!.rect.area
+    let a5 = placed.first { $0.node == 5 }!.rect.area
+    check(abs(a1 / a5 - 3.0) < 0.01, "cell area ∝ size (6/2 = 3) — got \(a1 / a5)")
+
+    section("treemap: full layout over the index")
+    let tindex = FileIndex()
+    DiskScopeScanner.scan(path: root.path, into: tindex)
+    tindex.aggregate()
+    let tiles = Treemap.layout(tindex, root: 0, in: Rect(x: 0, y: 0, w: 800, h: 600), minSide: 1)
+    check(!tiles.isEmpty, "produced tiles — got \(tiles.count)")
+    check(tiles.allSatisfy { $0.rect.x >= -0.5 && $0.rect.y >= -0.5 && $0.rect.x + $0.rect.w <= 800.5 && $0.rect.y + $0.rect.h <= 600.5 },
+          "all tiles within the 800×600 canvas")
+    // Leaf (file) tiles should tile the canvas: their areas sum to ≈ the whole canvas.
+    let leafArea: Double = tiles.filter { !$0.isDir }.map(\.rect.area).reduce(0, +)
+    check(leafArea > 800 * 600 * 0.80, "file cells cover most of the canvas — got \(Int(leafArea)) / \(800 * 600)")
+
 } catch {
     print("fixture setup failed: \(error)")
     failures += 1

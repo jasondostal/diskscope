@@ -1,12 +1,19 @@
 # DiskScope
 
-A native macOS app on one shared live file-index engine:
+**A real Mac *WinDirStat*** — hit scan, and seconds later see exactly what's eating your
+disk as a fast, zoomable, colored treemap. Every file a rectangle sized by bytes.
 
-- **v1.0 — instant filename search** (a Mac answer to voidtools' *Everything*)
-- **v1.1 — disk-space treemap** (a real Mac *WinDirStat*)
+The category has DaisyDisk and GrandPerspective, but none replicates WinDirStat/WizTree's
+*scary-fast whole-drive scan* — because the Windows versions read the NTFS Master File
+Table directly and macOS/APFS has no MFT. So the engineering *is* the product: we build
+the fast scan ourselves with `getattrlistbulk(2)` + a parallel walk.
 
-Both features are clients of the same hard thing: a complete, always-fresh index of
-every file on disk (path + size + dates), built once via a fast scan and kept live.
+> **Pivot note (2026-06-05):** DiskScope started as a two-app idea (instant filename search
+> *and* a treemap on one engine). Mid-build we found [Cling](https://github.com/FuzzyIdeas/Cling) —
+> a mature, polished, open-source native "Everything for Mac" that already fills the search
+> gap well. It does **no** disk-space view, so the WinDirStat gap is wide open and that's
+> where DiskScope now points. The search engine work is preserved (see `Sources` + research
+> docs) for a possible later differentiated angle, but the treemap is the product.
 
 ## Status — Phase 0 (scan-speed de-risk): ✅ PASSED
 
@@ -45,10 +52,16 @@ swift build -c release --product diskscope-scan
 - `Tests/DiskScopeCoreTests/` — fixture tests (run under full Xcode; CLI cross-checks
   against `find` in the meantime).
 
-## Roadmap
+## Roadmap (treemap-first, post-pivot)
 
-- **Phase 1** — the index engine: scanner + in-memory tree + FSEvents live patching.
-- **Phase 2** — v1.0 search UI (hotkey, type-to-filter, keyboard-first).
-- **Phase 3** — Full Disk Access onboarding & graceful degradation.
-- **Phase 4** — v1.1 treemap (the WinDirStat win).
-- **Phase 5** — persistence & polish (only if scan time demands persistence).
+- ✅ **Phase 0** — scan-speed de-risk (kernel-bound; parallel 5× → 4.2s).
+- ✅ **Phase 1** — index engine: scanner + in-memory tree + size aggregation + FSEvents
+  live patching. All clients build on this.
+- ✅ **Treemap layout** — squarified, area-proportional, recursive, tested headless.
+- **Next — parallel index build + scan tuning** (P-core cap, signal-not-broadcast; see
+  `docs/research/`) so a full-volume *sized* index lands in seconds.
+- **Treemap UI** — SwiftUI Canvas/Metal render of the layout: zoom, color-by-type,
+  click-to-drill, right-click reveal/delete. *(Needs full Xcode for the GUI bundle.)*
+- **Full Disk Access** onboarding & graceful degradation.
+- **Polish** — notarized DMG, app icon. Persistence only if scan-on-demand proves too slow.
+- *(Deferred)* filename **search** UI — engine exists; revisit only with a Cling-beating angle.
