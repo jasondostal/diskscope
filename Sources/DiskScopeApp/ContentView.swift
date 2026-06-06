@@ -10,11 +10,14 @@ struct ContentView: View {
     @EnvironmentObject private var settings: SettingsStore
     @State private var selected: Int?
     @State private var hover: HoverInfo?
+    @State private var hasFDA = true
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider().overlay(Color.white.opacity(0.08))
+            if !hasFDA { fdaBanner }
             content.frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider().overlay(Color.white.opacity(0.08))
             footer
@@ -24,9 +27,27 @@ struct ContentView: View {
         .onAppear {
             model.setPalette(theme.current.palette)
             model.setMinSide(settings.minTileSize)
+            hasFDA = FullDiskAccess.granted()
         }
         .onChange(of: theme.selectedID) { _, _ in model.setPalette(theme.current.palette) }
         .onChange(of: settings.minTileSize) { _, v in model.setMinSide(v) }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { hasFDA = FullDiskAccess.granted() } // re-check after returning from Settings
+        }
+    }
+
+    private var fdaBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.shield.fill").foregroundStyle(.yellow)
+            Text("Full Disk Access is off — protected folders won't be counted.")
+                .font(.callout)
+            Spacer()
+            Button("Grant Access…") { FullDiskAccess.openSystemSettings() }
+            Button("Re-check") { hasFDA = FullDiskAccess.granted() }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 8)
+        .background(Color.yellow.opacity(0.10))
+        .overlay(alignment: .bottom) { Divider().overlay(Color.white.opacity(0.08)) }
     }
 
     private var themeMenu: some View {
