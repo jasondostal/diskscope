@@ -12,6 +12,9 @@ public struct IndexNode {
     public var totalSize: UInt64 = 0 // subtree sum, filled by aggregate()
     public var isDir: Bool
     public var deleted: Bool = false // tombstone — live reconcile removes by marking
+    // Descendant counts, filled by aggregate() (WinDirStat's "Files" / "Items" columns).
+    public var subtreeFiles: Int32 = 0 // files anywhere under this node
+    public var subtreeItems: Int32 = 0 // all entries (files + dirs) under this node
 }
 
 /// What a single reconcile changed — for logging / Live-Wire UI deltas.
@@ -92,12 +95,20 @@ public final class FileIndex: ScanSink {
     /// Roll up each subtree's total allocated size. One reverse pass works because the
     /// scanner emits every parent before its children, so parent index < child index.
     public func aggregate() {
-        for i in nodes.indices { nodes[i].totalSize = nodes[i].deleted ? 0 : nodes[i].ownSize }
+        for i in nodes.indices {
+            nodes[i].totalSize = nodes[i].deleted ? 0 : nodes[i].ownSize
+            nodes[i].subtreeFiles = 0
+            nodes[i].subtreeItems = 0
+        }
         var i = nodes.count - 1
         while i > 0 {
             if !nodes[i].deleted {
                 let p = Int(nodes[i].parent)
-                if p >= 0 { nodes[p].totalSize += nodes[i].totalSize }
+                if p >= 0 {
+                    nodes[p].totalSize += nodes[i].totalSize
+                    nodes[p].subtreeItems += 1 + nodes[i].subtreeItems
+                    nodes[p].subtreeFiles += (nodes[i].isDir ? 0 : 1) + nodes[i].subtreeFiles
+                }
             }
             i -= 1
         }

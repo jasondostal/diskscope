@@ -9,6 +9,7 @@ final class TreeNode: Identifiable {
     let name: String
     let size: UInt64
     let isDir: Bool
+    let subtreeFiles: Int32
 
     private let index: FileIndex
 
@@ -20,6 +21,7 @@ final class TreeNode: Identifiable {
         self.name = id == 0 ? (n.name.split(separator: "/").last.map(String.init) ?? n.name) : n.name
         self.isDir = n.isDir
         self.size = n.isDir ? n.totalSize : n.ownSize
+        self.subtreeFiles = n.subtreeFiles
     }
 
     private var memoChildren: [TreeNode]??

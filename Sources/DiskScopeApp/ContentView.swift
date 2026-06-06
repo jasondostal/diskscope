@@ -124,19 +124,41 @@ struct TreeRow: View {
     let node: TreeNode
     let total: UInt64
 
+    private var fraction: Double { total > 0 ? Double(node.size) / Double(total) : 0 }
+
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: node.isDir ? "folder.fill" : "doc")
+            Image(systemName: node.isDir ? "folder.fill" : iconForExt(extOf(node.name)))
                 .font(.caption2)
-                .foregroundStyle(node.isDir ? Color.secondary : Color(.tertiaryLabelColor))
+                .foregroundStyle(node.isDir ? Color.secondary : categoryColor(FilePalette.category(forExt: extOf(node.name))))
             Text(node.name).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 6)
-            PercentBar(fraction: total > 0 ? Double(node.size) / Double(total) : 0)
-                .frame(width: 52, height: 7)
+            PercentBar(fraction: fraction).frame(width: 46, height: 7)
+            Text(String(format: "%.1f%%", fraction * 100))
+                .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
+                .frame(width: 42, alignment: .trailing)
+            // Files count (subtree) — blank for individual files.
+            Text(node.isDir ? node.subtreeFiles.formatted() : "")
+                .font(.caption2).monospacedDigit().foregroundStyle(.tertiary)
+                .frame(width: 52, alignment: .trailing)
             Text(humanSize(node.size))
-                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
-                .frame(width: 66, alignment: .trailing)
+                .font(.caption).monospacedDigit().foregroundStyle(.primary)
+                .frame(width: 70, alignment: .trailing)
         }
+    }
+}
+
+func iconForExt(_ e: String) -> String {
+    switch FilePalette.category(forExt: e) {
+    case .image: return "photo"
+    case .video: return "film"
+    case .audio: return "music.note"
+    case .archive: return "archivebox"
+    case .code, .web: return "chevron.left.forwardslash.chevron.right"
+    case .document: return "doc.text"
+    case .data: return "tablecells"
+    case .binary, .system: return "gearshape"
+    case .other: return "doc"
     }
 }
 
@@ -159,16 +181,25 @@ struct LegendView: View {
     @ObservedObject var model: TreemapModel
     var body: some View {
         List {
-            Section("File types") {
-                ForEach(model.legend, id: \.cat) { entry in
-                    HStack(spacing: 8) {
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(categoryColor(entry.cat))
-                            .frame(width: 12, height: 12)
-                        Text(entry.cat.rawValue.capitalized)
-                        Spacer()
-                        Text(humanSize(entry.bytes)).font(.caption).monospacedDigit().foregroundStyle(.secondary)
+            Section("File types — \(model.legend.count)") {
+                ForEach(model.legend) { e in
+                    HStack(spacing: 7) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(categoryColor(FilePalette.category(forExt: e.ext.hasPrefix("·") ? "" : e.ext)))
+                            .frame(width: 11, height: 11)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(e.displayExt).font(.callout).monospacedDigit()
+                            Text(e.ext.hasPrefix("·") ? "\(e.count.formatted()) files" : FilePalette.description(forExt: e.ext))
+                                .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                        }
+                        Spacer(minLength: 4)
+                        VStack(alignment: .trailing, spacing: 1) {
+                            Text(humanSize(e.bytes)).font(.caption).monospacedDigit()
+                            Text(String(format: "%.1f%%", e.fraction * 100))
+                                .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
+                        }
                     }
+                    .padding(.vertical, 1)
                 }
             }
         }

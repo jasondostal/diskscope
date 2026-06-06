@@ -39,6 +39,32 @@ public enum FilePalette {
     public static func oklch(forExt e: String) -> OKLCH { oklch(category(forExt: e)) }
     public static func category(forExt e: String) -> Category { extCategory[e] ?? .other }
 
+    /// Human description for the legend (WinDirStat's "Description" column).
+    public static func description(forExt e: String) -> String {
+        if e.isEmpty { return "No extension" }
+        if let known = extDescription[e] { return known }
+        return "\(e.uppercased()) file"
+    }
+
+    private static let extDescription: [String: String] = [
+        "swift": "Swift source", "py": "Python source", "js": "JavaScript", "ts": "TypeScript",
+        "c": "C source", "h": "C header", "cpp": "C++ source", "go": "Go source", "rs": "Rust source",
+        "java": "Java source", "rb": "Ruby source", "sh": "Shell script", "json": "JSON data",
+        "html": "HTML document", "css": "Stylesheet", "svg": "SVG image", "xml": "XML document",
+        "yaml": "YAML config", "yml": "YAML config", "toml": "TOML config", "md": "Markdown",
+        "png": "PNG image", "jpg": "JPEG image", "jpeg": "JPEG image", "gif": "GIF image",
+        "heic": "HEIC image", "webp": "WebP image", "tiff": "TIFF image", "psd": "Photoshop",
+        "mp4": "MP4 video", "mov": "QuickTime video", "mkv": "Matroska video", "avi": "AVI video",
+        "webm": "WebM video", "mp3": "MP3 audio", "wav": "WAV audio", "flac": "FLAC audio",
+        "aac": "AAC audio", "m4a": "M4A audio", "zip": "ZIP archive", "gz": "Gzip archive",
+        "tar": "Tar archive", "7z": "7-Zip archive", "rar": "RAR archive", "dmg": "Disk image",
+        "pkg": "Installer package", "pack": "Git pack", "pdf": "PDF document", "doc": "Word document",
+        "docx": "Word document", "txt": "Plain text", "csv": "CSV data", "db": "Database",
+        "sqlite": "SQLite database", "pkl": "Python pickle", "parquet": "Parquet data", "log": "Log file",
+        "o": "Object file", "a": "Static library", "so": "Shared library", "dylib": "Dynamic library",
+        "wasm": "WebAssembly", "pyc": "Python bytecode", "plist": "Property list", "framework": "Framework",
+    ]
+
     /// sRGB (0…1) for a category's base color.
     public static func srgb(_ c: OKLCH) -> (r: Double, g: Double, b: Double) { oklchToSRGB(c) }
     public static func srgb(forExt e: String) -> (r: Double, g: Double, b: Double) { srgb(oklch(forExt: e)) }

@@ -12,8 +12,8 @@ final class TreemapModel: ObservableObject {
     @Published var dirCount: Int = 0
     @Published var totalSize: UInt64 = 0
     @Published var scanSeconds: Double = 0
-    /// Bytes per file category, largest first — drives the legend pane.
-    @Published var legend: [(cat: FilePalette.Category, bytes: UInt64)] = []
+    /// Per-extension breakdown, largest first — drives the legend pane.
+    @Published var legend: [LegendEntry] = []
 
     private var index: FileIndex?
     private var cachedTiles: [TreemapTile] = []
@@ -30,12 +30,30 @@ final class TreemapModel: ObservableObject {
             idx.aggregate()
             let secs = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1e9
 
-            // Tally bytes per category for the legend.
-            var cats: [FilePalette.Category: UInt64] = [:]
+            // Tally bytes + count per extension for the legend.
+            var bytesByExt: [String: UInt64] = [:]
+            var countByExt: [String: Int] = [:]
             for n in idx.nodes where !n.isDir && !n.deleted {
-                cats[FilePalette.category(forExt: extOf(n.name)), default: 0] += n.ownSize
+                let e = extOf(n.name)
+                bytesByExt[e, default: 0] += n.ownSize
+                countByExt[e, default: 0] += 1
             }
-            let legend = cats.sorted { $0.value > $1.value }.map { (cat: $0.key, bytes: $0.value) }
+            let total = max(1, idx.nodes.first?.totalSize ?? 1)
+            var entries = bytesByExt.map { e, bytes in
+                LegendEntry(ext: e, bytes: bytes, count: countByExt[e] ?? 0,
+                            fraction: Double(bytes) / Double(total))
+            }.sorted { $0.bytes > $1.bytes }
+            // Keep the top slice; roll the long tail into one "other" row.
+            let cap = 22
+            if entries.count > cap {
+                let tail = entries[cap...]
+                let tailBytes = tail.reduce(UInt64(0)) { $0 + $1.bytes }
+                let tailCount = tail.reduce(0) { $0 + $1.count }
+                entries = Array(entries.prefix(cap)) + [LegendEntry(
+                    ext: "·other", bytes: tailBytes, count: tailCount,
+                    fraction: Double(tailBytes) / Double(total))]
+            }
+            let legend = entries
 
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -79,6 +97,16 @@ final class TreemapModel: ObservableObject {
 
     /// Root of the directory tree (the scanned folder), or nil before a scan completes.
     func makeRootNode() -> TreeNode? { index.map { TreeNode(id: 0, index: $0) } }
+}
+
+/// One row of the file-type legend.
+struct LegendEntry: Identifiable {
+    let ext: String        // "·other" / "(none)" are synthetic
+    let bytes: UInt64
+    let count: Int
+    let fraction: Double
+    var id: String { ext }
+    var displayExt: String { ext.isEmpty ? "(none)" : (ext.hasPrefix("·") ? "other" : ".\(ext)") }
 }
 
 /// Extension (lowercased, no dot) of a filename, or "" if none.

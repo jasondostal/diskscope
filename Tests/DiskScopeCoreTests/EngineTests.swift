@@ -74,6 +74,16 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(rootKids, ["a.txt", "empty.txt", "sub"])
     }
 
+    func testSubtreeCounts() {
+        let index = builtIndex()
+        // root: files a, empty, b, c (4); items a, empty, sub, deep, b, c (6)
+        XCTAssertEqual(index.nodes[0].subtreeFiles, 4)
+        XCTAssertEqual(index.nodes[0].subtreeItems, 6)
+        let subIdx = index.children(of: 0).first { index.nodes[$0].name == "sub" }!
+        XCTAssertEqual(index.nodes[subIdx].subtreeFiles, 2, "b.txt + c.txt")
+        XCTAssertEqual(index.nodes[subIdx].subtreeItems, 3, "deep, b.txt, c.txt")
+    }
+
     // MARK: - Live reconcile (the FSEvents patch target)
 
     func testReconcileCreate() throws {
