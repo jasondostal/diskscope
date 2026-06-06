@@ -8,10 +8,8 @@ let package = Package(
         // The index engine's first organ: the bulk filesystem scanner.
         // Real, tested module — both v1.0 search and v1.1 treemap are clients of this.
         .target(name: "DiskScopeCore"),
-        // Phase 0 spike harness: scan a path, report count + wall-clock.
+        // CLI harness: scan/benchmark, --watch (live FSEvents), --treemap (SVG render).
         .executableTarget(name: "diskscope-scan", dependencies: ["DiskScopeCore"]),
-        // Runnable integration tests (XCTest needs full Xcode; this runs under CLT now).
-        .executableTarget(name: "diskscope-test", dependencies: ["DiskScopeCore"]),
         .testTarget(name: "DiskScopeCoreTests", dependencies: ["DiskScopeCore"]),
     ]
 )
