@@ -36,6 +36,25 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--watch" {
     RunLoop.main.run()
 }
 
+// diskscope-scan --treemap <path> [out.svg]  — scan, lay out, render a treemap image
+if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--treemap" {
+    let target = CommandLine.arguments[2]
+    let out = CommandLine.arguments.count > 3 ? CommandLine.arguments[3] : "/tmp/diskscope-treemap.svg"
+    let index = FileIndex()
+    let t0 = DispatchTime.now()
+    DiskScopeScanner.scan(path: target, into: index)
+    index.aggregate()
+    let canvas = Rect(x: 0, y: 0, w: 1600, h: 1000)
+    let tiles = Treemap.layout(index, root: 0, in: canvas, minSide: 1.5)
+    let svg = TreemapSVG.render(tiles: tiles, index: index, canvas: canvas)
+    try? svg.write(toFile: out, atomically: true, encoding: .utf8)
+    let secs = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1e9
+    let leaves = tiles.filter { !$0.isDir }.count
+    print("treemap: \(index.count) entries → \(tiles.count) tiles (\(leaves) files drawn) in \(String(format: "%.2f", secs))s")
+    print("wrote \(out)")
+    exit(0)
+}
+
 let path = CommandLine.arguments.count > 1
     ? CommandLine.arguments[1]
     : FileManager.default.homeDirectoryForCurrentUser.path
