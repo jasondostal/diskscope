@@ -150,7 +150,7 @@ public final class FileIndex: ScanSink {
 
         var delta = ReconcileDelta()
         var seen = Set<String>()
-        for e in fresh {
+        for e in fresh.entries {
             seen.insert(e.name)
             if let i = existing[e.name] {
                 if nodes[i].isDir == e.isDir {

@@ -76,12 +76,25 @@ public enum DiskScopeScanner {
         public let allocSize: UInt64
     }
 
-    /// Scan exactly one directory level — the primitive for reconcile() diffing.
-    /// Returns nil if the directory can't be opened (deleted / unreadable).
-    public static func scanLevel(path: String) -> [Entry]? {
+    /// One directory level plus the directory's own (device, inode) identity — the latter
+    /// lets the parallel builder dedup firmlink/hardlink/bind-mount duplicates.
+    public struct DirLevel {
+        public let dev: UInt64
+        public let ino: UInt64
+        public let entries: [Entry]
+    }
+
+    /// Scan exactly one directory level — the primitive for reconcile() diffing and the
+    /// parallel builder. Returns nil if the directory can't be opened (deleted/unreadable).
+    public static func scanLevel(path: String) -> DirLevel? {
         let fd = open(path, O_RDONLY | O_DIRECTORY)
         if fd < 0 { return nil }
         defer { close(fd) }
+
+        var st = stat()
+        let ok = fstat(fd, &st) == 0
+        let dev = ok ? UInt64(bitPattern: Int64(st.st_dev)) : 0
+        let ino = ok ? st.st_ino : 0
 
         let bitReturned = UInt32(truncatingIfNeeded: ATTR_CMN_RETURNED_ATTRS)
         let bitName = UInt32(truncatingIfNeeded: ATTR_CMN_NAME)
@@ -129,7 +142,7 @@ public enum DiskScopeScanner {
                 entry = entry.advanced(by: Int(len))
             }
         }
-        return entries
+        return DirLevel(dev: dev, ino: ino, entries: entries)
     }
 
     private static func scanRoot(path: String, rootToken: Int, into sink: ScanSink) {

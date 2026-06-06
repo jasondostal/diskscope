@@ -1,6 +1,8 @@
 import Foundation
 import Darwin
 
+private struct DevIno: Hashable { let dev: UInt64; let ino: UInt64 }
+
 /// Builds a FileIndex with a parallel scan: the expensive part (getattrlistbulk syscalls)
 /// fans out across worker threads draining a shared work-stealing queue of directory paths;
 /// the cheap part (assembling the tree with correct parent links) runs serially afterward
@@ -48,16 +50,22 @@ public enum ParallelIndexBuilder {
         var local: [(path: String, entries: [DiskScopeScanner.Entry])] = []
         var localErrors = 0
         while let path = shared.pop() {
-            if let entries = DiskScopeScanner.scanLevel(path: path) {
-                let prefix = path == "/" ? "/" : path + "/"
-                let childDirs = entries.lazy.filter { $0.isDir }.map { prefix + $0.name }
-                let bytes = entries.reduce(UInt64(0)) { $0 + ($1.isDir ? 0 : $1.allocSize) }
-                local.append((path, entries))
-                shared.complete(children: Array(childDirs), entries: entries.count, bytes: bytes)
-            } else {
+            guard let level = DiskScopeScanner.scanLevel(path: path) else {
                 localErrors += 1
                 shared.complete(children: [], entries: 0, bytes: 0)
+                continue
             }
+            // Dedup by (device, inode): firmlinks (e.g. /Users and /System/Volumes/Data/Users
+            // on APFS) and bind mounts expose the same directory under two paths — count once.
+            guard shared.firstVisit(dev: level.dev, ino: level.ino) else {
+                shared.complete(children: [], entries: 0, bytes: 0)
+                continue
+            }
+            let prefix = path == "/" ? "/" : path + "/"
+            let childDirs = level.entries.lazy.filter { $0.isDir }.map { prefix + $0.name }
+            let bytes = level.entries.reduce(UInt64(0)) { $0 + ($1.isDir ? 0 : $1.allocSize) }
+            local.append((path, level.entries))
+            shared.complete(children: Array(childDirs), entries: level.entries.count, bytes: bytes)
         }
         shared.merge(local, errors: localErrors)
     }
@@ -82,6 +90,8 @@ public enum ParallelIndexBuilder {
         private let cond = NSCondition()
         private var pending: [String]
         private var outstanding = 0
+
+        private var visited = Set<DevIno>()
 
         private(set) var byPath: [String: [DiskScopeScanner.Entry]] = [:]
         private(set) var errors = 0
@@ -120,6 +130,12 @@ public enum ParallelIndexBuilder {
                 for _ in 0..<children.count { cond.signal() } // wake only as many as enqueued
             }
             cond.unlock()
+        }
+
+        /// True the first time this (device, inode) is seen — false for duplicates.
+        func firstVisit(dev: UInt64, ino: UInt64) -> Bool {
+            cond.lock(); defer { cond.unlock() }
+            return visited.insert(DevIno(dev: dev, ino: ino)).inserted
         }
 
         func merge(_ results: [(path: String, entries: [DiskScopeScanner.Entry])], errors e: Int) {
