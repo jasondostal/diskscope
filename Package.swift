@@ -10,6 +10,8 @@ let package = Package(
         .target(name: "DiskScopeCore"),
         // Phase 0 spike harness: scan a path, report count + wall-clock.
         .executableTarget(name: "diskscope-scan", dependencies: ["DiskScopeCore"]),
+        // Runnable integration tests (XCTest needs full Xcode; this runs under CLT now).
+        .executableTarget(name: "diskscope-test", dependencies: ["DiskScopeCore"]),
         .testTarget(name: "DiskScopeCoreTests", dependencies: ["DiskScopeCore"]),
     ]
 )
