@@ -12,6 +12,8 @@ final class TreemapModel: ObservableObject {
     @Published var dirCount: Int = 0
     @Published var totalSize: UInt64 = 0
     @Published var scanSeconds: Double = 0
+    /// Bytes per file category, largest first — drives the legend pane.
+    @Published var legend: [(cat: FilePalette.Category, bytes: UInt64)] = []
 
     private var index: FileIndex?
     private var cachedTiles: [TreemapTile] = []
@@ -27,6 +29,14 @@ final class TreemapModel: ObservableObject {
             DiskScopeScanner.scan(path: p, into: idx)
             idx.aggregate()
             let secs = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1e9
+
+            // Tally bytes per category for the legend.
+            var cats: [FilePalette.Category: UInt64] = [:]
+            for n in idx.nodes where !n.isDir && !n.deleted {
+                cats[FilePalette.category(forExt: extOf(n.name)), default: 0] += n.ownSize
+            }
+            let legend = cats.sorted { $0.value > $1.value }.map { (cat: $0.key, bytes: $0.value) }
+
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.index = idx
@@ -34,6 +44,7 @@ final class TreemapModel: ObservableObject {
                 self.dirCount = idx.dirCount
                 self.totalSize = idx.nodes.first?.totalSize ?? 0
                 self.scanSeconds = secs
+                self.legend = legend
                 self.state = .ready
             }
         }
@@ -65,6 +76,15 @@ final class TreemapModel: ObservableObject {
         let n = index.nodes[node]
         return (index.path(of: node), n.isDir ? n.totalSize : n.ownSize)
     }
+
+    /// Root of the directory tree (the scanned folder), or nil before a scan completes.
+    func makeRootNode() -> TreeNode? { index.map { TreeNode(id: 0, index: $0) } }
+}
+
+/// Extension (lowercased, no dot) of a filename, or "" if none.
+func extOf(_ name: String) -> String {
+    guard let dot = name.lastIndex(of: "."), dot != name.startIndex else { return "" }
+    return String(name[name.index(after: dot)...]).lowercased()
 }
 
 /// Human-readable byte size.
