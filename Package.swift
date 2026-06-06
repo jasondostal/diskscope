@@ -10,6 +10,8 @@ let package = Package(
         .target(name: "DiskScopeCore"),
         // CLI harness: scan/benchmark, --watch (live FSEvents), --treemap (SVG render).
         .executableTarget(name: "diskscope-scan", dependencies: ["DiskScopeCore"]),
+        // The SwiftUI app — interactive treemap.
+        .executableTarget(name: "DiskScopeApp", dependencies: ["DiskScopeCore"]),
         .testTarget(name: "DiskScopeCoreTests", dependencies: ["DiskScopeCore"]),
     ]
 )
