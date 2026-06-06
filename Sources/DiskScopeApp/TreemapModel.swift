@@ -44,6 +44,15 @@ final class TreemapModel: ObservableObject {
     private var cushionSize: CGSize = .zero
     private var watcher: FSEventsWatcher?
 
+    /// Current color palette (driven by the selected theme). Drives the cushion render and,
+    /// via the views, the tree/legend colors.
+    var palette = Theme.default.palette
+    func setPalette(_ p: ThemePalette) {
+        palette = p
+        invalidateRenderCaches()
+        revision += 1
+    }
+
     func scan(_ rawPath: String) {
         // Canonicalize so the index keys match the symlink-resolved paths FSEvents reports
         // (else live reconcile silently misses — the /tmp vs /private/tmp trap).
@@ -127,8 +136,10 @@ final class TreemapModel: ObservableObject {
         guard index != nil, size.width > 2, size.height > 2 else { return nil }
         if size == cushionSize, let c = cushionCache { return c }
         let w = Int(size.width), h = Int(size.height)
-        let rgba = Treemap.renderCushionRGBA(tiles: tiles(for: size), width: w, height: h, ambient: 0.58) { [weak self] node in
-            self.map { FilePalette.srgb(forExt: $0.ext(of: node)) } ?? (0.5, 0.5, 0.5)
+        let pal = palette
+        let rgba = Treemap.renderCushionRGBA(tiles: tiles(for: size), width: w, height: h,
+                                             background: pal.background, ambient: pal.ambient) { [weak self] node in
+            self.map { pal.srgb(forExt: $0.ext(of: node)) } ?? (0.5, 0.5, 0.5)
         }
         guard let provider = CGDataProvider(data: Data(rgba) as CFData) else { return nil }
         let img = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32,

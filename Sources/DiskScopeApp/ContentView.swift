@@ -6,6 +6,7 @@ let bg = Color(red: 0.043, green: 0.051, blue: 0.063) // #0b0d10
 
 struct ContentView: View {
     @StateObject private var model = TreemapModel()
+    @StateObject private var theme = ThemeManager()
     @State private var selected: Int?
     @State private var hover: HoverInfo?
 
@@ -17,8 +18,21 @@ struct ContentView: View {
             Divider().overlay(Color.white.opacity(0.08))
             footer
         }
-        .background(bg)
+        .background(theme.current.palette.backgroundColor)
         .frame(minWidth: 860, minHeight: 600)
+        .onAppear { model.setPalette(theme.current.palette) }
+        .onChange(of: theme.selectedID) { _, _ in model.setPalette(theme.current.palette) }
+    }
+
+    private var themeMenu: some View {
+        Menu {
+            ForEach(Theme.presets) { t in
+                Button { theme.selectedID = t.id } label: {
+                    if theme.selectedID == t.id { Label(t.name, systemImage: "checkmark") } else { Text(t.name) }
+                }
+            }
+        } label: { Image(systemName: "paintpalette") }
+        .menuStyle(.borderlessButton).frame(width: 34)
     }
 
     @ViewBuilder private var content: some View {
@@ -75,6 +89,7 @@ struct ContentView: View {
                 Text("\(humanSize(model.totalSize)) · \(model.fileCount.formatted()) files · \(String(format: "%.1fs", model.scanSeconds))")
                     .font(.callout).foregroundStyle(.secondary).monospacedDigit()
                 Button { model.scan(model.path) } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+                themeMenu
                 Button("Choose…") { chooseFolder() }
             }
         }
@@ -148,7 +163,7 @@ struct NodeRows: View {
 
     var body: some View {
         TreeRow(node: node, total: model.totalSize, depth: depth,
-                isExpanded: expanded.contains(node.id)) {
+                isExpanded: expanded.contains(node.id), palette: model.palette) {
             if expanded.contains(node.id) { expanded.remove(node.id) } else { expanded.insert(node.id) }
         }
         .tag(node.id)
@@ -168,6 +183,7 @@ struct TreeRow: View {
     let total: UInt64
     let depth: Int
     let isExpanded: Bool
+    let palette: ThemePalette
     let onToggle: () -> Void
 
     private var fraction: Double { total > 0 ? Double(node.size) / Double(total) : 0 }
@@ -187,7 +203,7 @@ struct TreeRow: View {
             }
             Image(systemName: node.isDir ? "folder.fill" : iconForExt(extOf(node.name)))
                 .font(.caption2)
-                .foregroundStyle(node.isDir ? Color.secondary : categoryColor(FilePalette.category(forExt: extOf(node.name))))
+                .foregroundStyle(node.isDir ? Color.secondary : palette.color(FilePalette.category(forExt: extOf(node.name))))
             Text(node.name).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 6)
             PercentBar(fraction: fraction).frame(width: 46, height: 7)
@@ -241,7 +257,7 @@ struct LegendView: View {
                 ForEach(model.legend) { e in
                     HStack(spacing: 7) {
                         RoundedRectangle(cornerRadius: 2)
-                            .fill(categoryColor(FilePalette.category(forExt: e.ext.hasPrefix("·") ? "" : e.ext)))
+                            .fill(model.palette.color(FilePalette.category(forExt: e.ext.hasPrefix("·") ? "" : e.ext)))
                             .frame(width: 11, height: 11)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(e.displayExt).font(.callout).monospacedDigit()
