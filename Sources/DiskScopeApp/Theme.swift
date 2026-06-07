@@ -168,6 +168,51 @@ struct Theme: Identifiable {
             .code: "2f7ad0", .web: "1aa57a", .image: "d63a6a", .video: "c4263f", .audio: "2faa8a", .archive: "e0a82e", .document: "cbb7e6",
             .data: "3f8fd0", .model: "8a3fc0", .model3d: "5a4fc0", .binary: "d97a2e", .system: "5a6075", .other: "7e8296",
         ], bg: "0b0c12", ambient: 0.55)),
+        // Halloween — pumpkin, witch-purple, toxic green.
+        Theme(id: "halloween", name: "Halloween", palette: .curated([
+            .code: "ff7518", .web: "6cbf2e", .image: "b026ff", .video: "c01622", .audio: "76b900", .archive: "ff9e1b", .document: "e8d8b0",
+            .data: "8a3ffb", .model: "ff5c00", .model3d: "6a2fb0", .binary: "d2421f", .system: "4a4458", .other: "6b6478",
+        ], bg: "0c0810", ambient: 0.50)),
+        // Christmas — red, pine green, gold & snow.
+        Theme(id: "christmas", name: "Christmas", palette: .curated([
+            .code: "1f8a4c", .web: "2faa6a", .image: "d1232a", .video: "b01722", .audio: "2e9d55", .archive: "e0b740", .document: "f0ead6",
+            .data: "3aa0a0", .model: "c0392b", .model3d: "1f6e3a", .binary: "d98c2b", .system: "7a8a7a", .other: "b8c2b0",
+        ], bg: "0c1410", ambient: 0.54)),
+        // Horror — dried blood, sickly green, bone.
+        Theme(id: "horror", name: "Horror", palette: .curated([
+            .code: "6e7d5a", .web: "4a6a5a", .image: "8a1f22", .video: "b01015", .audio: "5a6e3a", .archive: "8a7a4a", .document: "cabfa0",
+            .data: "3a4a5a", .model: "5a2f4a", .model3d: "3a2f3a", .binary: "7a3a2a", .system: "3a3a3e", .other: "5a565a",
+        ], bg: "08080a", ambient: 0.42)),
+        // Vaporwave — pastel cyan, hot pink, lavender.
+        Theme(id: "vaporwave", name: "Vaporwave", palette: .curated([
+            .code: "6ad7ff", .web: "2bd9d2", .image: "ff6ec7", .video: "ff8fb0", .audio: "9d7bff", .archive: "ffd6a0", .document: "efe0ff",
+            .data: "7ad0ff", .model: "ff8fe0", .model3d: "b08fff", .binary: "ffae8f", .system: "9aa0c8", .other: "c4bfe0",
+        ], bg: "18102a", ambient: 0.58)),
+        // Harvest — '70s avocado, gold, burnt orange.
+        Theme(id: "harvest", name: "Harvest", palette: .curated([
+            .code: "6b8e23", .web: "5a7d3a", .image: "d98a2b", .video: "b5532e", .audio: "8a9a2a", .archive: "e0a52e", .document: "e8d2a0",
+            .data: "c08a3a", .model: "9a4a2a", .model3d: "6e5a2a", .binary: "c4632a", .system: "7a6a4a", .other: "9a8a6a",
+        ], bg: "161009", ambient: 0.52)),
+        // Sakura — cherry blossom pink, petal, leaf.
+        Theme(id: "sakura", name: "Sakura", palette: .curated([
+            .code: "ff8fb0", .web: "6fc2a0", .image: "ffb7c8", .video: "ff6f91", .audio: "9ed47a", .archive: "f5d76e", .document: "fdeef0",
+            .data: "8fb8e0", .model: "d98fc8", .model3d: "b08fd0", .binary: "ff9e7a", .system: "b8a8b0", .other: "d8c8cc",
+        ], bg: "1a1014", ambient: 0.60)),
+        // Matrix — phosphor green on black.
+        Theme(id: "matrix", name: "Matrix", palette: .curated([
+            .code: "00ff66", .web: "2ee88a", .image: "66ff99", .video: "00cc52", .audio: "88ff88", .archive: "aaff66", .document: "ccffcc",
+            .data: "00e676", .model: "33ffaa", .model3d: "00b34a", .binary: "7fff00", .system: "2a5a3a", .other: "4a6a4a",
+        ], bg: "020806", ambient: 0.45)),
+        // Noir — greyscale film, warm accents.
+        Theme(id: "noir", name: "Noir", palette: .curated([
+            .code: "c8c8c8", .web: "a8a8a8", .image: "d84a3a", .video: "b83a2a", .audio: "989898", .archive: "d2a24a", .document: "e8e8e8",
+            .data: "888888", .model: "b85a4a", .model3d: "787878", .binary: "c87a3a", .system: "585858", .other: "686868",
+        ], bg: "0a0a0b", ambient: 0.48)),
+        // Tropical — turquoise, hibiscus, mango, lime.
+        Theme(id: "tropical", name: "Tropical", palette: .curated([
+            .code: "16c4b0", .web: "00b4a0", .image: "ff5e8a", .video: "ff7a3d", .audio: "7ad13a", .archive: "ffd23f", .document: "fff0c8",
+            .data: "2eb8e0", .model: "ff5fb0", .model3d: "a06fd0", .binary: "ff8a3d", .system: "7a9a8a", .other: "a8c2a8",
+        ], bg: "07201e", ambient: 0.56)),
     ]
     static var `default`: Theme { presets[0] }
 }
