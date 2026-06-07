@@ -3,6 +3,8 @@
 **A native macOS WinDirStat** — hit scan, and seconds later see exactly what's eating your
 disk as a fast, live, cushioned **treemap** next to a dense, sortable directory tree.
 
+![DiskScope](readme.png)
+
 DiskScope renders disk usage as a *squarified treemap*: every file becomes a rectangle sized
 by the bytes it eats, packed to stay near-square and readable, and each rectangle is drawn as
 a 3D "cushion" with per-pixel Phong lighting written straight into a raw RGBA bitmap (no
