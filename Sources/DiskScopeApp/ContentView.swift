@@ -504,6 +504,21 @@ struct TreemapCanvas: View {
             .contextMenu {
                 if let node = hover?.node ?? selected { fileMenu(model, node) }
             }
+            .overlay(alignment: .topLeading) {
+                if model.isFocused {
+                    Button { model.clearTreemapFocus() } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "scope")
+                            Text(model.name(of: model.treemapRoot)).lineLimit(1)
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        }
+                        .font(.caption).padding(.horizontal, 9).padding(.vertical, 5)
+                        .background(.thinMaterial, in: Capsule())
+                    }
+                    .buttonStyle(.plain).padding(8)
+                    .help("Treemap is focused on this folder — click to return to the whole scan")
+                }
+            }
         }
     }
 
@@ -518,6 +533,10 @@ struct TreemapCanvas: View {
 
 @ViewBuilder
 func fileMenu(_ model: TreemapModel, _ node: Int) -> some View {
+    if model.isDir(node) {
+        Button { model.focusTreemap(on: node) } label: { Label("Focus Treemap Here", systemImage: "scope") }
+        Divider()
+    }
     Button { model.reveal(node) } label: { Label("Reveal in Finder", systemImage: "folder") }
     Button { model.open(node) } label: { Label("Open", systemImage: "arrow.up.forward.app") }
     Divider()

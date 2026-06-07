@@ -14,6 +14,8 @@ final class SettingsStore: ObservableObject {
 
     init() {
         let v = UserDefaults.standard.double(forKey: Keys.minTileSize)
-        minTileSize = (v >= 1 && v <= 12) ? v : 2
+        // Default to finest detail (1px): draws the tiny files instead of leaving dense folders
+        // as black voids — the QDirStat-style densely-tiled look.
+        minTileSize = (v >= 1 && v <= 12) ? v : 1
     }
 }

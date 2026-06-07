@@ -84,6 +84,38 @@ final class TreemapModel: ObservableObject {
         revision += 1
     }
 
+    /// The node the treemap is laid out from (0 = the whole scan). Right-clicking a folder can
+    /// re-root the map onto it — the TUI's drill-in, instant because it reuses the index.
+    private(set) var treemapRoot = 0
+    var isFocused: Bool { treemapRoot != 0 }
+
+    func focusTreemap(on node: Int) {
+        guard let index, node >= 0, node < index.nodes.count,
+              index.nodes[node].isDir, node != treemapRoot else { return }
+        treemapRoot = node
+        invalidateRenderCaches()
+        revision += 1
+    }
+
+    func clearTreemapFocus() {
+        guard treemapRoot != 0 else { return }
+        treemapRoot = 0
+        invalidateRenderCaches()
+        revision += 1
+    }
+
+    /// Basename of a node (the root shows its scanned-path basename).
+    func name(of node: Int) -> String {
+        guard let index, node >= 0, node < index.nodes.count else { return "" }
+        let n = index.nodes[node].name
+        return node == 0 ? (n.split(separator: "/").last.map(String.init) ?? n) : n
+    }
+
+    func isDir(_ node: Int) -> Bool {
+        guard let index, node >= 0, node < index.nodes.count else { return false }
+        return index.nodes[node].isDir
+    }
+
     func scan(_ rawPath: String) {
         // Canonicalize so the index keys match the symlink-resolved paths FSEvents reports
         // (else live reconcile silently misses — the /tmp vs /private/tmp trap).
@@ -92,6 +124,7 @@ final class TreemapModel: ObservableObject {
         state = .scanning
         scannedCount = 0; scannedBytes = 0; scanFraction = nil
         cachedTiles = []; cachedSize = .zero
+        treemapRoot = 0
         watcher?.stop(); watcher = nil
         let t0 = DispatchTime.now()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -174,8 +207,9 @@ final class TreemapModel: ObservableObject {
     func tiles(for size: CGSize) -> [TreemapTile] {
         guard let index, size.width > 4, size.height > 4 else { return [] }
         if size == cachedSize, !cachedTiles.isEmpty { return cachedTiles }
+        let root = (treemapRoot >= 0 && treemapRoot < index.nodes.count) ? treemapRoot : 0
         cachedTiles = Treemap.layout(
-            index, root: 0,
+            index, root: root,
             in: Rect(x: 0, y: 0, w: Double(size.width), h: Double(size.height)),
             minSide: minSide, cushionHeight: 0.42)
         cachedSize = size
