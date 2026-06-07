@@ -54,7 +54,7 @@ private func tuiSize() -> (cols: Int, rows: Int) {
 
 // MARK: - Input
 
-enum TUIKey: Equatable { case up, down, left, right, top, bottom, enter, back, refresh, trash, quit, other }
+enum TUIKey: Equatable { case up, down, left, right, top, bottom, enter, back, refresh, trash, theme, open, quit, other }
 
 /// Pure byte-sequence → key decode (escape sequences + vim/letter keys). Kept free of I/O
 /// so the mapping is obvious and could be unit-tested in isolation.
@@ -83,6 +83,9 @@ func decodeKey(_ b: [UInt8]) -> TUIKey {
     case 0x47:              return .bottom  // G
     case 0x72:              return .refresh // r
     case 0x74, 0x54:        return .trash   // t / T
+    case 0x63:              return .theme   // c — theme picker
+    case 0x6f, 0x4f:        return .open    // o / O — scan another folder
+    case 0x1b:              return .back    // bare Esc → back / cancel
     default:                return .other
     }
 }
@@ -149,9 +152,10 @@ private func cushionRows(_ index: FileIndex, root: Int, width: Int, rows: Int,
 // MARK: - The app
 
 final class TUI {
-    private let index: FileIndex
-    private let rootPath: String
-    private let palette: FilePalette.Palette   // active theme (shared with the GUI library)
+    private var index: FileIndex
+    private var rootPath: String
+    private var palette: FilePalette.Palette   // active theme (shared with the GUI library)
+    private var themeID: String                // current theme id (picker + persistence)
     private var cur = 0                 // node of the folder currently shown
     private var kids: [Int] = []        // cur's children, largest first
     private var sel = 0                 // index into kids
@@ -161,10 +165,11 @@ final class TUI {
     private let stateLock = NSLock()    // guards index/kids vs the FSEvents queue
     private var confirmMessage: String? // when set, shown in the footer (e.g. trash confirm)
 
-    init(index: FileIndex, rootPath: String, palette: FilePalette.Palette) {
+    init(index: FileIndex, rootPath: String, theme: FilePalette.Theme) {
         self.index = index
         self.rootPath = rootPath
-        self.palette = palette
+        self.palette = theme.palette
+        self.themeID = theme.id
         refreshKids()
     }
 
@@ -188,6 +193,8 @@ final class TUI {
             guard let key = nextKey() else { continue }      // EINTR → re-render
             if key == .quit { break loop }
             if key == .trash { handleTrash(); dirty = true; continue } // modal: handles its own IO
+            if key == .theme { pickTheme(); dirty = true; continue }   // modal
+            if key == .open  { openFolder(); dirty = true; continue }  // modal
             stateLock.lock()
             switch key {
             case .up:    if sel > 0 { sel -= 1 }
@@ -197,7 +204,7 @@ final class TUI {
             case .enter, .right: descend()
             case .left, .back:   ascend()
             case .refresh: reconcileVisible()
-            case .quit, .trash, .other: break
+            case .quit, .trash, .theme, .open, .other: break
             }
             dirty = true
             stateLock.unlock()
@@ -244,6 +251,126 @@ final class TUI {
             if n == 0 { return false }       // EOF
             // n < 0 → EINTR (e.g. SIGWINCH); retry the read
         }
+    }
+
+    // MARK: Theme picker (interactive)
+
+    /// Modal theme picker — a scrollable list of the shipped themes, each with a live swatch
+    /// strip in its own colors. Enter applies + persists; q / Esc / ← cancels.
+    private func pickTheme() {
+        let themes = FilePalette.themePresets
+        var pick = themes.firstIndex { $0.id == themeID } ?? 0
+        while true {
+            renderThemeMenu(themes, selected: pick)
+            guard let k = nextKey() else { continue }   // EINTR → redraw
+            switch k {
+            case .up:     if pick > 0 { pick -= 1 }
+            case .down:   if pick < themes.count - 1 { pick += 1 }
+            case .top:    pick = 0
+            case .bottom: pick = themes.count - 1
+            case .enter, .right:
+                themeID = themes[pick].id
+                palette = themes[pick].palette
+                UserDefaults.standard.set(themeID, forKey: "diskscope.theme")
+                return
+            case .back, .left, .quit:
+                return
+            default: break
+            }
+        }
+    }
+
+    private func renderThemeMenu(_ themes: [FilePalette.Theme], selected: Int) {
+        let (cols, rows) = tuiSize()
+        let listRows = max(1, rows - 2)
+        var off = 0
+        if selected >= listRows { off = selected - listRows + 1 }
+        var out = "\u{1b}[H\u{1b}[2J\u{1b}[7m"
+        out += pad("  Pick a theme   ↑↓ move · Enter apply · q cancel", cols) + "\u{1b}[0m\u{1b}[K\r\n"
+        let preview = FilePalette.previewCategories
+        for r in 0..<listRows {
+            let i = off + r
+            if i < themes.count {
+                let t = themes[i]
+                var swatch = ""
+                for cat in preview {
+                    let (sr, sg, sb) = rgb(t.palette.srgb(cat))
+                    swatch += "\u{1b}[38;2;\(sr);\(sg);\(sb)m█\u{1b}[0m"
+                }
+                let line = " \(i == selected ? "▸" : " ") \(padBack(t.name, 14)) \(swatch)"
+                let padded = padBack(line, cols, visibleLen: visibleWidth(line))
+                out += (i == selected ? "\u{1b}[48;2;40;46;58m" + padded + "\u{1b}[0m" : padded)
+            } else {
+                out += pad("", cols)
+            }
+            out += "\u{1b}[K\r\n"
+        }
+        out += "\u{1b}[J"
+        _ = out.withCString { write(STDOUT_FILENO, $0, strlen($0)) }
+    }
+
+    // MARK: Scan a different folder (interactive)
+
+    /// Prompt for a path and rescan it in place. `~` is expanded; a non-folder shows an error.
+    private func openFolder() {
+        guard let input = readPath(prompt: "Scan folder: ") else { return }
+        var path = input
+        if path == "~" { path = NSHomeDirectory() }
+        else if path.hasPrefix("~/") { path = NSHomeDirectory() + String(path.dropFirst()) }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else {
+            confirmMessage = "Not a folder: \(path)"
+            render(); usleep(1_400_000); confirmMessage = nil
+            return
+        }
+        rescan(to: path)
+    }
+
+    /// A minimal one-line text field on the bottom row. Enter submits, Esc / empty cancels,
+    /// Backspace edits. Returns nil on cancel.
+    private func readPath(prompt: String) -> String? {
+        var buf = ""
+        while true {
+            drawInputBar(prompt + buf)
+            var b = [UInt8](repeating: 0, count: 16)
+            let n = read(STDIN_FILENO, &b, b.count)
+            if n == 0 { return nil }     // EOF
+            if n < 0 { continue }        // EINTR (e.g. SIGWINCH) → redraw
+            var i = 0
+            while i < n {
+                let c = b[i]
+                if c == 0x0d || c == 0x0a { return buf.isEmpty ? nil : buf }  // Enter
+                if c == 0x1b { return nil }                                   // Esc cancels
+                if c == 0x7f || c == 0x08 { if !buf.isEmpty { buf.removeLast() } } // Backspace
+                else if c >= 0x20 && c < 0x7f { buf.append(Character(UnicodeScalar(c))) }
+                i += 1
+            }
+        }
+    }
+
+    private func drawInputBar(_ s: String) {
+        let (cols, rows) = tuiSize()
+        let bar = "\u{1b}[\(rows);1H\u{1b}[48;2;30;60;90m\u{1b}[1m" + pad(" " + s + "▏", cols) + "\u{1b}[0m"
+        _ = bar.withCString { write(STDOUT_FILENO, $0, strlen($0)) }
+    }
+
+    /// Stop watching, rebuild the index for `path`, reset the view to its root, resume watching.
+    /// The index build is synchronous (a second or two on a big tree); the bar shows progress.
+    private func rescan(to path: String) {
+        drawInputBar("Indexing \(path)…")
+        stateLock.lock()
+        watcher?.stop(); watcher = nil
+        var rbuf = [CChar](repeating: 0, count: Int(PATH_MAX))
+        let root = realpath(path, &rbuf) != nil ? String(cString: rbuf) : path
+        let fresh = ParallelIndexBuilder.build(root: root)
+        fresh.aggregate()
+        index = fresh
+        rootPath = root
+        cur = 0; sel = 0; top = 0
+        refreshKids()
+        stateLock.unlock()
+        startWatching()
+        dirty = true
     }
 
     private func descend() {
@@ -342,7 +469,7 @@ final class TUI {
         if let cm = confirmMessage {
             out += "\u{1b}[48;2;130;95;30m\u{1b}[1m" + pad(" " + cm, cols) + "\u{1b}[0m\u{1b}[K"
         } else {
-            let hint = " ↑↓/jk move · → enter · ← up · g/G ends · t trash · r refresh · q quit "
+            let hint = " ↑↓ move · → in · ← up · o open · c theme · t trash · r refresh · q quit "
             out += "\u{1b}[7m" + pad(hint, cols) + "\u{1b}[0m\u{1b}[K"
         }
         out += "\u{1b}[J" // clear anything below
@@ -455,12 +582,15 @@ func runTUI(path rawPath: String, theme themeID: String? = nil) -> Never {
             FileHandle.standardError.write("unknown theme '\(id)'; using \(FilePalette.themePresets[0].name)\n".data(using: .utf8)!)
             theme = FilePalette.themePresets[0]
         }
+    } else if let saved = UserDefaults.standard.string(forKey: "diskscope.theme"),
+              let t = FilePalette.theme(id: saved) {
+        theme = t   // remembered from a prior in-TUI pick (the 'c' picker persists it)
     } else {
         theme = FilePalette.themePresets[0]
     }
     FileHandle.standardError.write("indexing \(root)…\n".data(using: .utf8)!)
     let index = ParallelIndexBuilder.build(root: root)
     index.aggregate()
-    TUI(index: index, rootPath: root, palette: theme.palette).run()
+    TUI(index: index, rootPath: root, theme: theme).run()
     exit(0)
 }
