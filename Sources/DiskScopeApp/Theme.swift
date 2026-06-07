@@ -108,6 +108,66 @@ struct Theme: Identifiable {
             .archive: "fabd2f", .document: "fe8019", .data: "689d6a", .model: "e08ba0",
             .model3d: "7daeb8", .binary: "d65d0e", .system: "928374", .other: "a89984",
         ], bg: "282828", ambient: 0.58)),
+        // Winter — cool icy jewels, high contrast.
+        Theme(id: "winter", name: "Winter", palette: .curated([
+            .code: "1f6feb", .web: "0f9d8a", .image: "d4214a", .video: "c01f7a", .audio: "13b05a", .archive: "e6d24a", .document: "e8eef5",
+            .data: "1aa6c4", .model: "7b3fe4", .model3d: "5566d8", .binary: "e0476d", .system: "8893a6", .other: "b9c2d0",
+        ], bg: "0c1420", ambient: 0.56)),
+        // Spring — warm, bright, clear & light.
+        Theme(id: "spring", name: "Spring", palette: .curated([
+            .code: "ff7a52", .web: "2fc4bf", .image: "ffd24a", .video: "ff5d8f", .audio: "8fc63d", .archive: "f5a623", .document: "ffe0a0",
+            .data: "7aa6f0", .model: "b06fd6", .model3d: "ff9a6b", .binary: "ff6f5e", .system: "b8a07a", .other: "d8c2a0",
+        ], bg: "16100a", ambient: 0.60)),
+        // Summer — cool, soft, dusty pastels.
+        Theme(id: "summer", name: "Summer", palette: .curated([
+            .code: "7f9ec2", .web: "6fb7b0", .image: "d59aa8", .video: "c07f96", .audio: "9ec3a8", .archive: "e3d2a8", .document: "cdd6e0",
+            .data: "84a7c4", .model: "b49ec6", .model3d: "9a8fb8", .binary: "c79a8a", .system: "9aa3b0", .other: "b8bcc6",
+        ], bg: "1b2330", ambient: 0.58)),
+        // Autumn — warm, muted, earthy & golden.
+        Theme(id: "autumn", name: "Autumn", palette: .curated([
+            .code: "c9962e", .web: "1f7a6e", .image: "c0532a", .video: "8a2f3f", .audio: "7d7a35", .archive: "d2a02e", .document: "e0c79a",
+            .data: "4f79a0", .model: "8a2f55", .model3d: "a8762e", .binary: "c4622a", .system: "8a7a5e", .other: "a8987a",
+        ], bg: "170f0a", ambient: 0.52)),
+        // Circus — bold vintage carnival.
+        Theme(id: "circus", name: "Circus", palette: .curated([
+            .code: "d6243a", .web: "1f7ab0", .image: "f2b21e", .video: "e2452f", .audio: "2e8f4f", .archive: "caa23a", .document: "ecdcb0",
+            .data: "3a9bc4", .model: "c23a78", .model3d: "7a4fa0", .binary: "e67630", .system: "9a7a4a", .other: "c2a878",
+        ], bg: "1a1008", ambient: 0.56)),
+        // Pop Synth — neon synthwave pop.
+        Theme(id: "popsynth", name: "Pop Synth", palette: .curated([
+            .code: "ff4fd8", .web: "36f9f6", .image: "ff5fa2", .video: "ff2e97", .audio: "5cffb1", .archive: "ffe14d", .document: "d6a8ff",
+            .data: "2de2e6", .model: "b06bff", .model3d: "7b6cff", .binary: "ff8b39", .system: "6d5a9c", .other: "9d8bbf",
+        ], bg: "160a2e", ambient: 0.55)),
+        // Candy — bright playful sweets.
+        Theme(id: "candy", name: "Candy", palette: .curated([
+            .code: "ff5d8f", .web: "3bc9db", .image: "ff9a3c", .video: "ff4d6d", .audio: "7bd957", .archive: "ffd23f", .document: "ffe6f0",
+            .data: "4dc9ff", .model: "ff6fd0", .model3d: "9b7bff", .binary: "ff7a45", .system: "c0a8cc", .other: "d8c4d8",
+        ], bg: "1a1220", ambient: 0.60)),
+        // Forest — deep woodland greens & bark.
+        Theme(id: "forest", name: "Forest", palette: .curated([
+            .code: "5fae6a", .web: "3f9d8a", .image: "c7a13a", .video: "b5532e", .audio: "8fbf4d", .archive: "caa24a", .document: "d8c79a",
+            .data: "4f9a7a", .model: "a06a3a", .model3d: "6b8e3a", .binary: "c07a3a", .system: "6a7355", .other: "8a8a6a",
+        ], bg: "0e160e", ambient: 0.50)),
+        // Ocean — deep sea blues, coral biolum.
+        Theme(id: "ocean", name: "Ocean", palette: .curated([
+            .code: "2f9bd0", .web: "1fb0a8", .image: "ff7e6b", .video: "ef5a78", .audio: "4fd0c0", .archive: "e0b65a", .document: "bfe0e6",
+            .data: "3f8fd0", .model: "7a6fd8", .model3d: "2f6f9e", .binary: "ef8f5a", .system: "5a7585", .other: "7e96a0",
+        ], bg: "08141c", ambient: 0.50)),
+        // Sunset — warm gold to magenta dusk.
+        Theme(id: "sunset", name: "Sunset", palette: .curated([
+            .code: "ff8c42", .web: "ff6f91", .image: "ffd166", .video: "e63950", .audio: "ff9e6d", .archive: "f2b134", .document: "ffd9bf",
+            .data: "ff5d73", .model: "c44fb0", .model3d: "8a5fc0", .binary: "ff7a45", .system: "9c6f7a", .other: "c2929a",
+        ], bg: "1e0f18", ambient: 0.56)),
+        // Ember — black, red, orange, glow.
+        Theme(id: "ember", name: "Ember", palette: .curated([
+            .code: "ff6a2e", .web: "e03a2e", .image: "ffb23f", .video: "ff3b2e", .audio: "ff8f3a", .archive: "d98a2e", .document: "f2c79a",
+            .data: "ff5a45", .model: "c43a4a", .model3d: "9e4a3a", .binary: "ff7e2e", .system: "6e4a40", .other: "8a6a5a",
+        ], bg: "160806", ambient: 0.50)),
+        // Jewel — emerald, ruby, sapphire, topaz.
+        Theme(id: "jewel", name: "Jewel", palette: .curated([
+            .code: "2f7ad0", .web: "1aa57a", .image: "d63a6a", .video: "c4263f", .audio: "2faa8a", .archive: "e0a82e", .document: "cbb7e6",
+            .data: "3f8fd0", .model: "8a3fc0", .model3d: "5a4fc0", .binary: "d97a2e", .system: "5a6075", .other: "7e8296",
+        ], bg: "0b0c12", ambient: 0.55)),
     ]
     static var `default`: Theme { presets[0] }
 }
