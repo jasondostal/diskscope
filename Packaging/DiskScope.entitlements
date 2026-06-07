@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Intentionally NOT sandboxed. DiskScope indexes the whole disk; App Sandbox would
+	     confine it to user-selected folders and defeat the purpose. Distribution is
+	     Developer ID + notarization (hardened runtime), NOT the Mac App Store.
+
+	     Full Disk Access is a runtime TCC grant (System Settings → Privacy & Security →
+	     Full Disk Access), not an entitlement — so nothing is needed here for it.
+
+	     A plain SwiftUI app under the hardened runtime needs no exceptions; this file is
+	     kept (empty) as the place to add one if a future need appears. -->
+</dict>
+</plist>

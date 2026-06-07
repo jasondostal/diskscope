@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>DiskScope</string>
+	<key>CFBundleDisplayName</key>
+	<string>DiskScope</string>
+	<key>CFBundleExecutable</key>
+	<string>DiskScope</string>
+	<!-- Stable identity: TCC / Full Disk Access grants are keyed on this. Do NOT change it
+	     once the app has been granted FDA, or the grant silently stops applying. -->
+	<key>CFBundleIdentifier</key>
+	<string>com.witekdivers.DiskScope</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<!-- CFBundleShortVersionString (marketing) is the source of truth here; package.sh
+	     stamps CFBundleVersion (build number) from the git commit count at build time. -->
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 Jason Dostal. All rights reserved.</string>
+	<key>NSMainNibFile</key>
+	<string></string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+</dict>
+</plist>
