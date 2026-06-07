@@ -86,12 +86,20 @@ swift test
 
 ### CLI / TUI
 
+The CLI ships inside the app bundle; **installed via Homebrew it's on your PATH as `diskscope`**:
+
+```sh
+diskscope --tui ~          # interactive terminal UI (needs a truecolor terminal)
+diskscope --treemap <path> # render a treemap SVG
+diskscope --term <path>    # static cushioned treemap in the terminal
+diskscope <path> [workers] # scan benchmark
+```
+
+From source the product is `diskscope-scan`:
+
 ```sh
 swift build -c release --product diskscope-scan
-.build/release/diskscope-scan --tui <path>        # interactive terminal UI (truecolor)
-.build/release/diskscope-scan --treemap <path>    # render a treemap SVG
-.build/release/diskscope-scan --term <path>       # static cushioned treemap in the terminal
-.build/release/diskscope-scan <path> [workers]    # scan benchmark
+.build/release/diskscope-scan --tui <path>
 ```
 
 ## Architecture

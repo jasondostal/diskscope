@@ -17,8 +17,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 APP_NAME="DiskScope"
-PRODUCT="DiskScopeApp"          # SwiftPM product (the executable)
-VERSION="1.0.0"                 # marketing version; keep in sync with Packaging/Info.plist
+PRODUCT="DiskScopeApp"          # SwiftPM product (the GUI executable)
+CLI_PRODUCT="diskscope-scan"    # SwiftPM product (the CLI/TUI; bundled + exposed as `diskscope`)
+VERSION="1.0.1"                 # marketing version; keep in sync with Packaging/Info.plist
 DIST="dist"
 APP="$DIST/$APP_NAME.app"
 ENTITLEMENTS="Packaging/DiskScope.entitlements"
@@ -42,16 +43,22 @@ if [[ ! -f "$ICNS" ]]; then
 fi
 
 # --- Build -----------------------------------------------------------------------------
-step "building release binary"
+step "building release binaries (GUI + CLI)"
 swift build -c release --product "$PRODUCT"
+swift build -c release --product "$CLI_PRODUCT"
 BIN=".build/release/$PRODUCT"
+CLI_BIN=".build/release/$CLI_PRODUCT"
 [[ -x "$BIN" ]] || { echo "build did not produce $BIN" >&2; exit 1; }
+[[ -x "$CLI_BIN" ]] || { echo "build did not produce $CLI_BIN" >&2; exit 1; }
 
 # --- Assemble bundle -------------------------------------------------------------------
 step "assembling $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/$APP_NAME"
+# The CLI/TUI ships inside the bundle. It keeps its filename here (DiskScope vs diskscope
+# would collide on a case-insensitive volume); the cask exposes it on PATH as `diskscope`.
+cp "$CLI_BIN" "$APP/Contents/MacOS/$CLI_PRODUCT"
 cp Packaging/Info.plist "$APP/Contents/Info.plist"
 cp "$ICNS" "$APP/Contents/Resources/AppIcon.icns"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
@@ -70,9 +77,10 @@ if [[ -z "$IDENTITY" ]]; then
     | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)"$/\1/' || true)"
 fi
 
-# --- Sign ------------------------------------------------------------------------------
+# --- Sign (inside-out: nested CLI first, then the bundle) ------------------------------
 if [[ -n "$IDENTITY" ]]; then
   step "signing (Developer ID): $IDENTITY"
+  codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP/Contents/MacOS/$CLI_PRODUCT"
   codesign --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" \
     --sign "$IDENTITY" "$APP"
@@ -81,6 +89,7 @@ else
   step "signing ad-hoc (no Developer ID identity found)"
   echo "  ⚠ ad-hoc signature: runs on THIS Mac only; not distributable, not notarizable."
   echo "  ⚠ set up a Developer ID cert (Packaging/README.md) then re-run to ship."
+  codesign --force --sign - "$APP/Contents/MacOS/$CLI_PRODUCT"
   codesign --force --sign - "$APP"
   SIGNED_DEVID=0
 fi
