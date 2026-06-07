@@ -29,6 +29,17 @@ func resolveRecency() -> FilePalette.RecencyShading {
         horizonDays: env["DISKSCOPE_RECENCY_DAYS"].flatMap { Double($0) } ?? 365)
 }
 
+/// Optional depth-shading layer for the CLI render modes, from the environment:
+/// DISKSCOPE_DEPTH=on, DISKSCOPE_DEPTH_STRENGTH=0..1. Off otherwise.
+func resolveDepth() -> FilePalette.DepthShading {
+    let env = ProcessInfo.processInfo.environment
+    let on = (env["DISKSCOPE_DEPTH"] ?? "").lowercased()
+    guard on == "1" || on == "on" || on == "true" else { return FilePalette.DepthShading() }
+    return FilePalette.DepthShading(
+        enabled: true,
+        strength: env["DISKSCOPE_DEPTH_STRENGTH"].flatMap { Double($0) } ?? 0.6)
+}
+
 func writePNG(_ rgba: [UInt8], width: Int, height: Int, to path: String) {
     guard let provider = CGDataProvider(data: Data(rgba) as CFData),
           let img = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
@@ -130,12 +141,15 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--cushion" {
     let W = 1600, H = 1000
     let palette = resolvePalette()
     let recency = resolveRecency()
+    let depth = resolveDepth()
     let now = Int64(Date().timeIntervalSince1970)
     let tiles = Treemap.layout(index, root: 0, in: Rect(x: 0, y: 0, w: Double(W), h: Double(H)),
                                minSide: 1.5, cushionHeight: 0.42)
-    let rgba = Treemap.renderCushionRGBA(tiles: tiles, width: W, height: H, ambient: palette.ambient) { node in
-        recency.apply(palette.srgb(forExt: cliExt(index.nodes[node].name)),
-                      modTime: index.nodes[node].modTime, now: now)
+    let rgba = Treemap.renderCushionRGBA(tiles: tiles, width: W, height: H, ambient: palette.ambient) { tile in
+        var c = recency.apply(palette.srgb(forExt: cliExt(index.nodes[tile.node].name)),
+                              modTime: index.nodes[tile.node].modTime, now: now)
+        c = depth.apply(c, depth: tile.depth)
+        return c
     }
     writePNG(rgba, width: W, height: H, to: out)
     print("cushion: \(tiles.count) tiles → \(out)")
@@ -161,12 +175,15 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--term" {
     index.aggregate()
     let palette = resolvePalette()
     let recency = resolveRecency()
+    let depth = resolveDepth()
     let now = Int64(Date().timeIntervalSince1970)
     let tiles = Treemap.layout(index, root: 0, in: Rect(x: 0, y: 0, w: Double(W), h: Double(H)),
                                minSide: 1, cushionHeight: 0.42)
-    let rgba = Treemap.renderCushionRGBA(tiles: tiles, width: W, height: H, ambient: palette.ambient) { node in
-        recency.apply(palette.srgb(forExt: cliExt(index.nodes[node].name)),
-                      modTime: index.nodes[node].modTime, now: now)
+    let rgba = Treemap.renderCushionRGBA(tiles: tiles, width: W, height: H, ambient: palette.ambient) { tile in
+        var c = recency.apply(palette.srgb(forExt: cliExt(index.nodes[tile.node].name)),
+                              modTime: index.nodes[tile.node].modTime, now: now)
+        c = depth.apply(c, depth: tile.depth)
+        return c
     }
     func px(_ x: Int, _ y: Int) -> (Int, Int, Int) {
         let i = (y * W + x) * 4

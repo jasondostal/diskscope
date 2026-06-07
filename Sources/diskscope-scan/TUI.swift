@@ -54,7 +54,7 @@ private func tuiSize() -> (cols: Int, rows: Int) {
 
 // MARK: - Input
 
-enum TUIKey: Equatable { case up, down, left, right, top, bottom, enter, back, refresh, trash, theme, open, ageToggle, ageDown, ageUp, quit, other }
+enum TUIKey: Equatable { case up, down, left, right, top, bottom, enter, back, refresh, trash, theme, open, ageToggle, ageDown, ageUp, depthToggle, quit, other }
 
 /// Pure byte-sequence → key decode (escape sequences + vim/letter keys). Kept free of I/O
 /// so the mapping is obvious and could be unit-tested in isolation.
@@ -88,6 +88,7 @@ func decodeKey(_ b: [UInt8]) -> TUIKey {
     case 0x61:              return .ageToggle // a — toggle recency shading
     case 0x2d:              return .ageDown   // - — weaker
     case 0x3d, 0x2b:        return .ageUp     // = / + — stronger
+    case 0x64:              return .depthToggle // d — toggle depth shading
     case 0x1b:              return .back      // bare Esc → back / cancel
     default:                return .other
     }
@@ -129,15 +130,18 @@ private func tuiDate(_ epoch: Int64) -> String {
 /// The treemap of `root` as half-block text rows (two vertical pixels per character cell).
 /// Shared shape with --term; here it's composed into the right pane of the split view.
 private func cushionRows(_ index: FileIndex, root: Int, width: Int, rows: Int,
-                         palette: FilePalette.Palette, recency: FilePalette.RecencyShading) -> [String] {
+                         palette: FilePalette.Palette, recency: FilePalette.RecencyShading,
+                         depth: FilePalette.DepthShading) -> [String] {
     guard width > 0, rows > 0 else { return [] }
     let H = max(2, rows * 2)
     let now = Int64(Date().timeIntervalSince1970)
     let tiles = Treemap.layout(index, root: root, in: Rect(x: 0, y: 0, w: Double(width), h: Double(H)),
                                minSide: 1, cushionHeight: 0.42)
-    let px = Treemap.renderCushionRGBA(tiles: tiles, width: width, height: H, ambient: palette.ambient) { node in
-        recency.apply(palette.srgb(forExt: cliExt(index.nodes[node].name)),
-                      modTime: index.nodes[node].modTime, now: now)
+    let px = Treemap.renderCushionRGBA(tiles: tiles, width: width, height: H, ambient: palette.ambient) { tile in
+        var c = recency.apply(palette.srgb(forExt: cliExt(index.nodes[tile.node].name)),
+                              modTime: index.nodes[tile.node].modTime, now: now)
+        c = depth.apply(c, depth: tile.depth)
+        return c
     }
     var lines: [String] = []
     var y = 0
@@ -162,6 +166,7 @@ final class TUI {
     private var palette: FilePalette.Palette   // active theme (shared with the GUI library)
     private var themeID: String                // current theme id (picker + persistence)
     private var recency: FilePalette.RecencyShading // optional age-shading layer (toggle with 'a')
+    private var depth: FilePalette.DepthShading      // optional depth-shading layer (toggle with 'd')
     private var cur = 0                 // node of the folder currently shown
     private var kids: [Int] = []        // cur's children, largest first
     private var sel = 0                 // index into kids
@@ -177,6 +182,7 @@ final class TUI {
         self.palette = theme.palette
         self.themeID = theme.id
         self.recency = TUI.loadRecency()
+        self.depth = TUI.loadDepth()
         refreshKids()
     }
 
@@ -190,6 +196,16 @@ final class TUI {
         guard d.object(forKey: "diskscope.recency.enabled") != nil else { return FilePalette.RecencyShading() }
         return FilePalette.RecencyShading(enabled: d.bool(forKey: "diskscope.recency.enabled"),
                                           strength: d.double(forKey: "diskscope.recency.strength"))
+    }
+    private func persistDepth() {
+        UserDefaults.standard.set(depth.enabled, forKey: "diskscope.depth.enabled")
+        UserDefaults.standard.set(depth.strength, forKey: "diskscope.depth.strength")
+    }
+    private static func loadDepth() -> FilePalette.DepthShading {
+        let d = UserDefaults.standard
+        guard d.object(forKey: "diskscope.depth.enabled") != nil else { return FilePalette.DepthShading() }
+        return FilePalette.DepthShading(enabled: d.bool(forKey: "diskscope.depth.enabled"),
+                                        strength: d.double(forKey: "diskscope.depth.strength"))
     }
 
     private func refreshKids() {
@@ -226,6 +242,7 @@ final class TUI {
             case .ageToggle: recency.enabled.toggle(); persistRecency()
             case .ageDown:   recency.strength = max(0.0, recency.strength - 0.1); persistRecency()
             case .ageUp:     recency.strength = min(1.0, recency.strength + 0.1); persistRecency()
+            case .depthToggle: depth.enabled.toggle(); persistDepth()
             case .quit, .trash, .theme, .open, .other: break
             }
             dirty = true
@@ -465,7 +482,7 @@ final class TUI {
 
         // Right pane: cushion treemap of the focused folder.
         let mapRows = bodyRows
-        let map = cushionRows(index, root: cur, width: max(1, rightW), rows: mapRows, palette: palette, recency: recency)
+        let map = cushionRows(index, root: cur, width: max(1, rightW), rows: mapRows, palette: palette, recency: recency, depth: depth)
 
         // Left pane: scrollable child list. Keep the selection in view.
         if sel < top { top = sel }
@@ -492,7 +509,8 @@ final class TUI {
             out += "\u{1b}[48;2;130;95;30m\u{1b}[1m" + pad(" " + cm, cols) + "\u{1b}[0m\u{1b}[K"
         } else {
             let age = recency.enabled ? "a age \(Int((recency.strength * 100).rounded()))% −/+" : "a age"
-            let hint = " ↑↓ move · → in · ← up · o open · c theme · \(age) · t trash · q quit "
+            let dpt = depth.enabled ? "d depth on" : "d depth"
+            let hint = " ↑↓ move · → in · ← up · o open · c theme · \(age) · \(dpt) · t trash · q quit "
             out += "\u{1b}[7m" + pad(hint, cols) + "\u{1b}[0m\u{1b}[K"
         }
         out += "\u{1b}[J" // clear anything below

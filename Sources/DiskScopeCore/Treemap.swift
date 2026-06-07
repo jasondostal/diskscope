@@ -88,14 +88,15 @@ public enum Treemap {
 
     /// Render cushioned, Phong-shaded leaf cells into an RGBA8 pixel buffer (width*height*4,
     /// premultiplied-opaque). No CoreGraphics dependency — pure bytes — so it's testable and
-    /// the caller wraps it in a CGImage. `colorFor` returns the leaf's base sRGB (0…1).
+    /// the caller wraps it in a CGImage. `colorFor` is handed the whole leaf tile (node, depth,
+    /// rect) and returns its base sRGB (0…1) — so color functions can use depth/size, not just type.
     public static func renderCushionRGBA(
         tiles: [TreemapTile], width: Int, height: Int,
         background: (r: Double, g: Double, b: Double) = (0.043, 0.051, 0.063),
         light: (x: Double, y: Double, z: Double) = (-0.32, -0.45, 0.83),
         ambient: Double = 0.42,
         cushionHeight: Double = 0.6,
-        colorFor: (Int) -> (r: Double, g: Double, b: Double)
+        colorFor: (TreemapTile) -> (r: Double, g: Double, b: Double)
     ) -> [UInt8] {
         var buf = [UInt8](repeating: 255, count: max(0, width * height * 4))
         guard width > 0, height > 0 else { return buf }
@@ -110,7 +111,7 @@ public enum Treemap {
         let lx = light.x / ll, ly = light.y / ll, lz = light.z / ll
 
         for t in tiles where !t.isDir {
-            let (cr, cg, cb) = colorFor(t.node)
+            let (cr, cg, cb) = colorFor(t)
             let rx = t.rect.x, ry = t.rect.y, rw = t.rect.w, rh = t.rect.h
             let x0 = max(0, Int(rx.rounded(.down)))
             let y0 = max(0, Int(ry.rounded(.down)))

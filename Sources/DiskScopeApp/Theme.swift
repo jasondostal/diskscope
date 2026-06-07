@@ -88,6 +88,10 @@ final class ThemeManager: ObservableObject {
     @Published var recency: FilePalette.RecencyShading {
         didSet { persistRecency(); paletteRevision += 1 }
     }
+    /// Optional depth-shading LAYER — mutes deeper-nested files so structure reads. Off by default.
+    @Published var depth: FilePalette.DepthShading {
+        didSet { persistDepth(); paletteRevision += 1 }
+    }
     /// Bumped on any change that affects the active palette — the views watch this to re-tint.
     @Published private(set) var paletteRevision = 0
 
@@ -95,6 +99,7 @@ final class ThemeManager: ObservableObject {
         selectedID = UserDefaults.standard.string(forKey: "diskscope.theme") ?? Theme.default.id
         custom = ThemeManager.loadCustom()
         recency = ThemeManager.loadRecency()
+        depth = ThemeManager.loadDepth()
     }
 
     var isCustom: Bool { selectedID == Theme.customID }
@@ -160,5 +165,22 @@ final class ThemeManager: ObservableObject {
         return FilePalette.RecencyShading(enabled: d.bool(forKey: "diskscope.recency.enabled"),
                                           strength: d.double(forKey: "diskscope.recency.strength"),
                                           horizonDays: d.double(forKey: "diskscope.recency.horizonDays"))
+    }
+
+    // MARK: - Depth-shading persistence
+
+    private func persistDepth() {
+        let d = UserDefaults.standard
+        d.set(depth.enabled, forKey: "diskscope.depth.enabled")
+        d.set(depth.strength, forKey: "diskscope.depth.strength")
+        d.set(depth.fullDepth, forKey: "diskscope.depth.fullDepth")
+    }
+
+    private static func loadDepth() -> FilePalette.DepthShading {
+        let d = UserDefaults.standard
+        guard d.object(forKey: "diskscope.depth.enabled") != nil else { return FilePalette.DepthShading() }
+        return FilePalette.DepthShading(enabled: d.bool(forKey: "diskscope.depth.enabled"),
+                                        strength: d.double(forKey: "diskscope.depth.strength"),
+                                        fullDepth: d.integer(forKey: "diskscope.depth.fullDepth"))
     }
 }

@@ -64,6 +64,15 @@ struct SettingsView: View {
                 }
                 Text("A layer over any theme: files untouched for a while drain toward grey (recent = vivid), so big stale files to clean up pop out. Doesn't change your theme.")
                     .font(.caption).foregroundStyle(.secondary)
+
+                Divider().padding(.vertical, 2)
+
+                Toggle("Fade by depth", isOn: $theme.depth.enabled)
+                if theme.depth.enabled {
+                    labeledSlider("Strength", $theme.depth.strength, 0...1, fmt: "%.2f")
+                }
+                Text("Another layer: deeper-nested files mute toward grey so top-level folders read boldest. Makes the tree structure visible in the map.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             .formStyle(.grouped)
             .padding()
