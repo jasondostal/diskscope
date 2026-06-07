@@ -121,6 +121,7 @@ public final class FileIndex: ScanSink {
         }
     }
 
+
     /// Immediate (live) children of a node, as index values (for treemap drill-down).
     public func children(of index: Int) -> [Int] {
         var out: [Int] = []

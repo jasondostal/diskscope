@@ -219,6 +219,7 @@ final class TreemapModel: ObservableObject {
         return String(name[name.index(after: dot)...]).lowercased()
     }
 
+
     /// Path + size for a node — used by hover readout.
     func info(for node: Int) -> (path: String, size: UInt64)? {
         guard let index, node >= 0, node < index.nodes.count else { return nil }

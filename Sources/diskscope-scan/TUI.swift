@@ -54,7 +54,7 @@ private func tuiSize() -> (cols: Int, rows: Int) {
 
 // MARK: - Input
 
-enum TUIKey: Equatable { case up, down, left, right, top, bottom, enter, back, refresh, quit, other }
+enum TUIKey: Equatable { case up, down, left, right, top, bottom, enter, back, refresh, trash, quit, other }
 
 /// Pure byte-sequence → key decode (escape sequences + vim/letter keys). Kept free of I/O
 /// so the mapping is obvious and could be unit-tested in isolation.
@@ -82,6 +82,7 @@ func decodeKey(_ b: [UInt8]) -> TUIKey {
     case 0x67:              return .top     // g
     case 0x47:              return .bottom  // G
     case 0x72:              return .refresh // r
+    case 0x74, 0x54:        return .trash   // t / T
     default:                return .other
     }
 }
@@ -106,6 +107,17 @@ private func tuiHuman(_ bytes: UInt64) -> String {
 private func rgb(_ c: (r: Double, g: Double, b: Double)) -> (Int, Int, Int) {
     func u(_ v: Double) -> Int { max(0, min(255, Int((v * 255).rounded()))) }
     return (u(c.r), u(c.g), u(c.b))
+}
+
+private let tuiDateFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.locale = Locale(identifier: "en_US_POSIX")
+    f.dateFormat = "yyyy-MM-dd"
+    return f
+}()
+private func tuiDate(_ epoch: Int64) -> String {
+    guard epoch > 0 else { return "—" }
+    return tuiDateFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(epoch)))
 }
 
 /// The treemap of `root` as half-block text rows (two vertical pixels per character cell).
@@ -145,6 +157,7 @@ final class TUI {
     private var dirty = true
     private var watcher: FSEventsWatcher?
     private let stateLock = NSLock()    // guards index/kids vs the FSEvents queue
+    private var confirmMessage: String? // when set, shown in the footer (e.g. trash confirm)
 
     init(index: FileIndex, rootPath: String) {
         self.index = index
@@ -170,9 +183,10 @@ final class TUI {
             if tuiResized != 0 { tuiResized = 0; dirty = true }
             if dirty { render(); dirty = false }
             guard let key = nextKey() else { continue }      // EINTR → re-render
+            if key == .quit { break loop }
+            if key == .trash { handleTrash(); dirty = true; continue } // modal: handles its own IO
             stateLock.lock()
             switch key {
-            case .quit: stateLock.unlock(); break loop
             case .up:    if sel > 0 { sel -= 1 }
             case .down:  if sel < kids.count - 1 { sel += 1 }
             case .top:    sel = 0
@@ -180,10 +194,52 @@ final class TUI {
             case .enter, .right: descend()
             case .left, .back:   ascend()
             case .refresh: reconcileVisible()
-            case .other: break
+            case .quit, .trash, .other: break
             }
             dirty = true
             stateLock.unlock()
+        }
+    }
+
+    /// Move the selected entry to the Trash, with a y/N confirm. The modal read happens outside
+    /// the state lock (so a background FSEvents reconcile can't block on the prompt); the index
+    /// mutation re-acquires it.
+    private func handleTrash() {
+        stateLock.lock()
+        guard sel < kids.count else { stateLock.unlock(); return }
+        let node = kids[sel]
+        let name = index.nodes[node].name
+        let path = index.path(of: node)
+        let parentPath = index.path(of: cur)
+        stateLock.unlock()
+
+        confirmMessage = "Move “\(name)” to Trash?   y = yes · any other key = cancel"
+        render()
+        guard readYes() else { confirmMessage = nil; return }
+        confirmMessage = nil
+
+        do {
+            try FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil)
+        } catch {
+            confirmMessage = "Trash failed: \(error.localizedDescription)"
+            render(); usleep(1_200_000); confirmMessage = nil
+            return
+        }
+        stateLock.lock()
+        index.reconcile(directoryPath: parentPath)
+        index.aggregate()
+        refreshKids()
+        stateLock.unlock()
+    }
+
+    /// Blocking single-byte read for a y/N confirm. Returns true only on 'y'/'Y'.
+    private func readYes() -> Bool {
+        var b = [UInt8](repeating: 0, count: 1)
+        while true {
+            let n = read(STDIN_FILENO, &b, 1)
+            if n == 1 { return b[0] == 0x79 || b[0] == 0x59 }
+            if n == 0 { return false }       // EOF
+            // n < 0 → EINTR (e.g. SIGWINCH); retry the read
         }
     }
 
@@ -238,11 +294,11 @@ final class TUI {
 
     private func render() {
         let (cols, rows) = tuiSize()
-        guard cols > 20, rows > 4 else {
+        guard cols > 20, rows > 5 else {
             _ = "\u{1b}[H\u{1b}[2JTerminal too small".withCString { write(STDOUT_FILENO, $0, strlen($0)) }
             return
         }
-        let bodyRows = rows - 2                 // minus header + footer
+        let bodyRows = rows - 3                 // minus header + stats line + footer
         let leftW = max(24, min(48, cols * 4 / 10))
         let rightW = cols - leftW - 1           // 1 col separator
 
@@ -276,11 +332,45 @@ final class TUI {
             out += left + "\u{1b}[0m│" + right + "\u{1b}[0m\u{1b}[K\r\n"
         }
 
-        // Footer: key hints.
-        let hint = " ↑↓/jk move · → enter · ← up · g/G ends · r refresh · q quit "
-        out += "\u{1b}[7m" + pad(hint, cols) + "\u{1b}[0m\u{1b}[K"
+        // Stats line: the selected entry's details (the "little window" of stats).
+        out += statsLine(width: cols) + "\u{1b}[K\r\n"
+
+        // Footer: a trash/other confirm prompt when pending, else key hints.
+        if let cm = confirmMessage {
+            out += "\u{1b}[48;2;130;95;30m\u{1b}[1m" + pad(" " + cm, cols) + "\u{1b}[0m\u{1b}[K"
+        } else {
+            let hint = " ↑↓/jk move · → enter · ← up · g/G ends · t trash · r refresh · q quit "
+            out += "\u{1b}[7m" + pad(hint, cols) + "\u{1b}[0m\u{1b}[K"
+        }
         out += "\u{1b}[J" // clear anything below
         _ = out.withCString { write(STDOUT_FILENO, $0, strlen($0)) }
+    }
+
+    /// The selected entry's stats, as a full-width tinted bar: swatch · name · size · share of
+    /// the current folder · (files/items for dirs) · modified date.
+    private func statsLine(width: Int) -> String {
+        let bg = "\u{1b}[48;2;28;32;40m"
+        guard sel < kids.count else {
+            return bg + pad("  (empty folder)", width) + "\u{1b}[0m"
+        }
+        let n = index.nodes[kids[sel]]
+        let isDir = n.isDir
+        let size = isDir ? n.totalSize : n.ownSize
+        let pct = Double(size) / Double(max(1, sizeOf(cur))) * 100
+        let (sr, sg, sb) = isDir ? (150, 150, 160) : rgb(FilePalette.srgb(forExt: cliExt(n.name)))
+
+        var suffix = "  \(tuiHuman(size)) · \(String(format: "%.1f", pct))%"
+        if isDir { suffix += " · \(n.subtreeFiles) files · \(n.subtreeItems) items" }
+        suffix += "  \(tuiDate(n.modTime)) "
+
+        let nameAvail = max(4, width - suffix.count - 3) // " " + glyph + " "
+        let name = ellipsizeBack(n.name + (isDir ? "/" : ""), nameAvail)
+        // Glyph resets only the FG (\e[39m) so the bar's background survives to the line end.
+        let glyph = "\u{1b}[38;2;\(sr);\(sg);\(sb)m\(isDir ? "▸" : "·")\u{1b}[39m"
+        let left = " \(glyph) \(name)"
+        let leftVis = visibleWidth(left)
+        let padCount = max(0, width - suffix.count - leftVis)
+        return bg + left + String(repeating: " ", count: padCount) + suffix + "\u{1b}[0m"
     }
 
     /// One left-pane row: color swatch · name · size · share-of-folder bar.

@@ -94,6 +94,7 @@ public enum Treemap {
         background: (r: Double, g: Double, b: Double) = (0.043, 0.051, 0.063),
         light: (x: Double, y: Double, z: Double) = (-0.32, -0.45, 0.83),
         ambient: Double = 0.42,
+        cushionHeight: Double = 0.6,
         colorFor: (Int) -> (r: Double, g: Double, b: Double)
     ) -> [UInt8] {
         var buf = [UInt8](repeating: 255, count: max(0, width * height * 4))
@@ -110,20 +111,30 @@ public enum Treemap {
 
         for t in tiles where !t.isDir {
             let (cr, cg, cb) = colorFor(t.node)
-            let c = t.cushion
-            let x0 = max(0, Int(t.rect.x.rounded(.down)))
-            let y0 = max(0, Int(t.rect.y.rounded(.down)))
-            let x1 = min(width, Int((t.rect.x + t.rect.w).rounded(.up)))
-            let y1 = min(height, Int((t.rect.y + t.rect.h).rounded(.up)))
-            if x1 <= x0 || y1 <= y0 { continue }
+            let rx = t.rect.x, ry = t.rect.y, rw = t.rect.w, rh = t.rect.h
+            let x0 = max(0, Int(rx.rounded(.down)))
+            let y0 = max(0, Int(ry.rounded(.down)))
+            let x1 = min(width, Int((rx + rw).rounded(.up)))
+            let y1 = min(height, Int((ry + rh).rounded(.up)))
+            if x1 <= x0 || y1 <= y0 || rw <= 0 || rh <= 0 { continue }
+
+            // A FRESH cushion per leaf, in the tile's own coordinates — a clean parabolic pillow
+            // that peaks dead-center of every square, identical in shape from tile to tile (the
+            // KDirStat/QDirStat look). The old code reused the accumulated van Wijk surface, so
+            // each leaf inherited its parents' ridges and its highlight drifted off-center —
+            // that's what read as inconsistent, "droopy" bubbles.
+            let s1x = 4 * cushionHeight * (2 * rx + rw) / rw
+            let s2x = -4 * cushionHeight / rw
+            let s1y = 4 * cushionHeight * (2 * ry + rh) / rh
+            let s2y = -4 * cushionHeight / rh
 
             for py in y0..<y1 {
                 let fy = Double(py) + 0.5
-                let ny = -(2 * c.s2y * fy + c.s1y)
+                let ny = -(2 * s2y * fy + s1y)
                 let rowBase = py * width
                 for px in x0..<x1 {
                     let fx = Double(px) + 0.5
-                    let nx = -(2 * c.s2x * fx + c.s1x)
+                    let nx = -(2 * s2x * fx + s1x)
                     let nlen = (nx * nx + ny * ny + 1).squareRoot()
                     var cosA = (nx * lx + ny * ly + lz) / nlen
                     if cosA < 0 { cosA = 0 }

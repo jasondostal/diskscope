@@ -19,7 +19,7 @@ cd "$(dirname "$0")/.."
 APP_NAME="DiskScope"
 PRODUCT="DiskScopeApp"          # SwiftPM product (the GUI executable)
 CLI_PRODUCT="diskscope-scan"    # SwiftPM product (the CLI/TUI; bundled + exposed as `diskscope`)
-VERSION="1.0.1"                 # marketing version; keep in sync with Packaging/Info.plist
+VERSION="1.0.2"                 # marketing version; keep in sync with Packaging/Info.plist
 DIST="dist"
 APP="$DIST/$APP_NAME.app"
 ENTITLEMENTS="Packaging/DiskScope.entitlements"
