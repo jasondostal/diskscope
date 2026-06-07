@@ -21,7 +21,7 @@ struct SettingsView: View {
                     ForEach(Theme.presets) { Text($0.name).tag($0.id) }
                     Text("Custom").tag(Theme.customID)
                 }
-                .pickerStyle(.segmented)
+                .pickerStyle(.menu)
 
                 // Live swatch preview of the selected theme.
                 HStack(spacing: 4) {

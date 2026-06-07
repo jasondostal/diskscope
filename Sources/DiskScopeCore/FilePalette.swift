@@ -14,29 +14,31 @@ public enum FilePalette {
     }
 
     public enum Category: String, CaseIterable, Sendable {
-        case code, web, image, video, audio, archive, document, data, binary, system, other
+        case code, web, image, video, audio, archive, document, data, model, model3d, binary, system, other
     }
 
     /// Representative categories for a legend/theme swatch preview.
     public static let previewCategories: [Category] =
-        [.code, .web, .image, .video, .audio, .archive, .document, .data, .binary, .other]
+        [.code, .web, .image, .video, .audio, .archive, .document, .data, .model, .model3d, .binary, .other]
 
-    /// Base OKLCH per category — even hue spacing, moderate chroma, dark-tuned lightness.
+    /// Base OKLCH per category — even hue spacing, dark-tuned lightness, and enough chroma to
+    /// read as real color on the treemap (the tiles are the point; the palette should sing, not
+    /// whisper). Hues stay roughly evenly spaced so categories remain distinguishable.
     public static func oklch(_ cat: Category) -> OKLCH {
-        // Muted jewel tones: low chroma, mid lightness — calm on a dark canvas. Hues stay
-        // evenly spaced so categories remain distinguishable without shouting.
         switch cat {
-        case .code:     return OKLCH(0.66, 0.085, 256) // blue
-        case .web:      return OKLCH(0.70, 0.075, 195) // cyan
-        case .image:    return OKLCH(0.66, 0.095, 350) // pink
-        case .video:    return OKLCH(0.63, 0.105,  32) // red-orange
-        case .audio:    return OKLCH(0.70, 0.085, 145) // green
-        case .archive:  return OKLCH(0.74, 0.090,  95) // amber
-        case .document: return OKLCH(0.66, 0.085, 305) // violet
-        case .data:     return OKLCH(0.70, 0.075, 172) // teal
-        case .binary:   return OKLCH(0.67, 0.095,  58) // orange
-        case .system:   return OKLCH(0.50, 0.020, 256) // dim slate
-        case .other:    return OKLCH(0.58, 0.022, 250) // neutral gray-blue
+        case .code:     return OKLCH(0.68, 0.130, 256) // blue
+        case .web:      return OKLCH(0.74, 0.115, 195) // cyan
+        case .image:    return OKLCH(0.70, 0.150, 350) // pink
+        case .video:    return OKLCH(0.66, 0.165,  32) // red-orange
+        case .audio:    return OKLCH(0.74, 0.140, 145) // green
+        case .archive:  return OKLCH(0.78, 0.140,  95) // gold
+        case .document: return OKLCH(0.70, 0.130, 305) // violet
+        case .data:     return OKLCH(0.74, 0.120, 172) // teal
+        case .model:    return OKLCH(0.70, 0.170, 328) // magenta — ML weights (often the giants)
+        case .model3d:  return OKLCH(0.68, 0.150, 268) // indigo — 3D / print
+        case .binary:   return OKLCH(0.70, 0.140,  58) // orange
+        case .system:   return OKLCH(0.55, 0.030, 256) // dim slate
+        case .other:    return OKLCH(0.62, 0.045, 250) // muted blue-grey (still has a pulse)
         }
     }
 
@@ -67,6 +69,13 @@ public enum FilePalette {
         "sqlite": "SQLite database", "pkl": "Python pickle", "parquet": "Parquet data", "log": "Log file",
         "o": "Object file", "a": "Static library", "so": "Shared library", "dylib": "Dynamic library",
         "wasm": "WebAssembly", "pyc": "Python bytecode", "plist": "Property list", "framework": "Framework",
+        "safetensors": "Model weights", "gguf": "GGUF model", "ggml": "GGML model", "ckpt": "Model checkpoint",
+        "pt": "PyTorch weights", "pth": "PyTorch weights", "onnx": "ONNX model", "mlmodel": "Core ML model",
+        "mlpackage": "Core ML package", "tflite": "TensorFlow Lite", "bin": "Binary / model weights",
+        "stl": "3D model (STL)", "obj": "3D model (OBJ)", "3mf": "3D print (3MF)", "gcode": "G-code (print)",
+        "step": "CAD (STEP)", "stp": "CAD (STEP)", "blend": "Blender scene", "gltf": "glTF 3D scene",
+        "glb": "glTF 3D (binary)", "scad": "OpenSCAD", "fbx": "FBX 3D model", "usdz": "USDZ 3D",
+        "ipynb": "Jupyter notebook", "h5": "HDF5 data", "npy": "NumPy array",
     ]
 
     /// sRGB (0…1) for a category's base color.
@@ -85,15 +94,19 @@ public enum FilePalette {
     private static let extCategory: [String: Category] = {
         var m: [String: Category] = [:]
         func add(_ cat: Category, _ exts: [String]) { for e in exts { m[e] = cat } }
-        add(.code, ["swift","py","js","ts","tsx","jsx","c","h","cpp","cc","hpp","m","mm","go","rs","java","kt","rb","php","cs","scala","clj","ex","exs","lua","pl","r","jl","dart","sh","bash","zsh","fish","vim"])
-        add(.web, ["html","htm","css","scss","sass","less","svg","json","xml","yaml","yml","toml","graphql"])
-        add(.image, ["png","jpg","jpeg","gif","heic","heif","webp","tiff","tif","bmp","ico","raw","cr2","nef","psd","ai"])
-        add(.video, ["mp4","mov","mkv","avi","webm","flv","wmv","m4v","mpg","mpeg","3gp"])
-        add(.audio, ["mp3","wav","flac","aac","m4a","ogg","opus","aiff","alac","wma","mid"])
-        add(.archive, ["zip","gz","tar","tgz","7z","rar","xz","bz2","zst","pack","dmg","pkg","iso","cab"])
-        add(.document, ["pdf","doc","docx","md","txt","rtf","pages","epub","mobi","odt","tex","key","ppt","pptx","xls","xlsx","numbers","csv"])
-        add(.data, ["db","sqlite","sqlite3","pkl","parquet","dat","bin","idx","model","npy","npz","h5","arrow","feather","log"])
-        add(.binary, ["o","a","so","dylib","exe","wasm","framework","bundle","class","pyc","obj","lib"])
+        add(.code, ["swift","py","js","ts","tsx","jsx","c","h","cpp","cc","hpp","m","mm","go","rs","java","kt","rb","php","cs","scala","clj","ex","exs","lua","pl","r","jl","dart","sh","bash","zsh","fish","vim","ipynb","sql"])
+        add(.web, ["html","htm","css","scss","sass","less","svg","json","jsonl","ndjson","xml","yaml","yml","toml","graphql"])
+        add(.image, ["png","jpg","jpeg","gif","heic","heif","webp","tiff","tif","bmp","ico","raw","cr2","nef","dng","psd","ai","avif"])
+        add(.video, ["mp4","mov","mkv","avi","webm","flv","wmv","m4v","mpg","mpeg","3gp","prores"])
+        add(.audio, ["mp3","wav","flac","aac","m4a","ogg","opus","aiff","alac","wma","mid","aif"])
+        add(.archive, ["zip","gz","tar","tgz","7z","rar","xz","bz2","zst","pack","dmg","pkg","iso","cab","img","vmdk","qcow2","sparseimage","sparsebundle"])
+        add(.document, ["pdf","doc","docx","md","txt","rtf","pages","epub","mobi","odt","tex","key","ppt","pptx","xls","xlsx","numbers","csv","tsv"])
+        add(.data, ["db","sqlite","sqlite3","wal","pkl","parquet","dat","idx","npy","npz","h5","hdf5","arrow","feather","log"])
+        // ML model weights / checkpoints — frequently the largest files on a disk.
+        add(.model, ["safetensors","gguf","ggml","ckpt","pt","pth","onnx","pb","mlmodel","mlpackage","mlmodelc","tflite","bin","caffemodel","params"])
+        // 3D models / printing / CAD.
+        add(.model3d, ["stl","obj","3mf","gcode","step","stp","ply","fbx","dae","blend","gltf","glb","3ds","scad","amf","usdz"])
+        add(.binary, ["o","a","so","dylib","exe","wasm","framework","bundle","class","pyc","lib"])
         add(.system, ["plist","cache","lock","tmp","ds_store","localized","pid","sock"])
         return m
     }()
@@ -117,4 +130,33 @@ public enum FilePalette {
         let v = max(0, min(1, x))
         return v <= 0.0031308 ? 12.92 * v : 1.055 * pow(v, 1 / 2.4) - 0.055
     }
+
+    // MARK: - sRGB → OKLCH (inverse of the above) — lets themes be authored from familiar hex.
+
+    /// sRGB (0…1) → OKLCH.
+    public static func oklch(fromSRGB c: (r: Double, g: Double, b: Double)) -> OKLCH {
+        func lin(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        let r = lin(c.r), g = lin(c.g), b = lin(c.b)
+        let l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b
+        let m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b
+        let s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b
+        let l_ = cbrt(l), m_ = cbrt(m), s_ = cbrt(s)
+        let L = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_
+        let a = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_
+        let bb = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_
+        let C = (a * a + bb * bb).squareRoot()
+        var H = atan2(bb, a) * 180 / .pi
+        if H < 0 { H += 360 }
+        return OKLCH(L, C, H)
+    }
+
+    /// Parse "#rrggbb" (or "rrggbb") → sRGB (0…1). Invalid input → mid-grey.
+    public static func srgb(hex: String) -> (r: Double, g: Double, b: Double) {
+        let s = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
+        guard s.count == 6, let v = UInt32(s, radix: 16) else { return (0.5, 0.5, 0.5) }
+        return (Double((v >> 16) & 0xff) / 255, Double((v >> 8) & 0xff) / 255, Double(v & 0xff) / 255)
+    }
+
+    /// Parse "#rrggbb" → OKLCH.
+    public static func oklch(hex: String) -> OKLCH { oklch(fromSRGB: srgb(hex: hex)) }
 }

@@ -37,19 +37,41 @@ final class TreemapModel: ObservableObject {
     /// Bumped on any index mutation (trash) to force the views to re-render.
     @Published private(set) var revision = 0
 
+    /// When set (a file extension, "" = no-extension), the treemap fades every tile that
+    /// ISN'T that type so the matching ones pop. Driven by clicking a legend row.
+    @Published var highlightExt: String? {
+        didSet {
+            guard oldValue != highlightExt else { return }
+            cushionCache = nil // colors change, layout doesn't — only the bitmap is stale
+            revision += 1
+        }
+    }
+
     private var index: FileIndex?
     private var cachedTiles: [TreemapTile] = []
     private var cachedSize: CGSize = .zero
     private var cushionCache: CGImage?
     private var cushionSize: CGSize = .zero
+    private var cushionHighlight: String?   // highlightExt the cached cushion was rendered for
     private var watcher: FSEventsWatcher?
+    /// Live FSEvents auto-refresh. OFF until it's reworked to be incremental + off-main; today's
+    /// full-index pass per change pegs the CPU on a big active disk. Manual Refresh always works.
+    private let liveRefreshEnabled = false
+    // Live-refresh coalescing — see enqueueChanges.
+    private var pendingDirs = Set<String>()
+    private var liveRefreshScheduled = false
+    private var lastLiveRefresh = DispatchTime.now()
+    private let liveRefreshInterval = 2.0   // seconds — at most one heavy pass per window
 
     /// Current color palette (driven by the selected theme). Drives the cushion render and,
     /// via the views, the tree/legend colors.
     var palette = Theme.default.palette
     func setPalette(_ p: ThemePalette) {
         palette = p
-        invalidateRenderCaches()
+        // Only colors / ambient / background changed — the tile geometry is identical, so keep
+        // the (size-keyed) layout cache and re-render just the cushion bitmap. Re-laying-out the
+        // whole index on every theme flip was the switch lag.
+        cushionCache = nil
         revision += 1
     }
 
@@ -95,7 +117,12 @@ final class TreemapModel: ObservableObject {
                 self.scanSeconds = secs
                 self.legend = legend
                 self.state = .ready
-                self.startWatching(p)
+                // Live FSEvents auto-refresh is OFF by default: on a huge, actively-churning
+                // home dir (~1M files) a single refresh pass (reconcile + full aggregate + legend
+                // + treemap re-render) can exceed the throttle window, so passes pile up and peg
+                // the CPU. Use the manual Refresh button instead. Re-enable once it's incremental
+                // and off-main. (FSEventsWatcher + enqueue/flush code is kept, just not started.)
+                if self.liveRefreshEnabled { self.startWatching(p) }
             }
         }
     }
@@ -104,17 +131,33 @@ final class TreemapModel: ObservableObject {
 
     private func startWatching(_ root: String) {
         watcher?.stop()
+        pendingDirs.removeAll()
         let w = FSEventsWatcher(roots: [root]) { [weak self] dirs, _ in
-            // Hop to main: reconcile mutates the index the UI reads on the main thread.
-            DispatchQueue.main.async { self?.applyChanges(dirs) }
+            DispatchQueue.main.async { self?.enqueueChanges(dirs) }
         }
         _ = w.start()
         watcher = w
     }
 
-    /// Reconcile the directories FSEvents flagged, then refresh derived state once per batch.
-    private func applyChanges(_ dirs: [String]) {
-        guard let idx = index, state == .ready else { return }
+    /// Coalesce FSEvents batches and run the heavy refresh at most once per `liveRefreshInterval`.
+    /// Before this, reconcile + a full aggregate + a full legend rebuild (O(files): ~1M on a big
+    /// home dir) ran on the MAIN THREAD for *every* batch — on an active disk that pegged a core
+    /// and beachballed the UI. Now changes accumulate and one bounded pass drains them.
+    private func enqueueChanges(_ dirs: [String]) {
+        guard state == .ready else { return }
+        pendingDirs.formUnion(dirs)
+        guard !liveRefreshScheduled else { return }
+        liveRefreshScheduled = true
+        let elapsed = Double(DispatchTime.now().uptimeNanoseconds - lastLiveRefresh.uptimeNanoseconds) / 1e9
+        let delay = max(0, liveRefreshInterval - elapsed)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.flushChanges() }
+    }
+
+    private func flushChanges() {
+        liveRefreshScheduled = false
+        lastLiveRefresh = DispatchTime.now()
+        let dirs = pendingDirs; pendingDirs.removeAll()
+        guard let idx = index, state == .ready, !dirs.isEmpty else { return }
         var changed = false
         for d in dirs where idx.reconcile(directoryPath: d).changed { changed = true }
         guard changed else { return }
@@ -143,19 +186,28 @@ final class TreemapModel: ObservableObject {
     /// as Phong-shaded pillows; selection/hover outlines are drawn over this by the view.
     func cushionImage(for size: CGSize) -> CGImage? {
         guard index != nil, size.width > 2, size.height > 2 else { return nil }
-        if size == cushionSize, let c = cushionCache { return c }
+        if size == cushionSize, cushionHighlight == highlightExt, let c = cushionCache { return c }
         let w = Int(size.width), h = Int(size.height)
         let pal = palette
+        let hl = highlightExt
+        let bg = pal.background
         let rgba = Treemap.renderCushionRGBA(tiles: tiles(for: size), width: w, height: h,
                                              background: pal.background, ambient: pal.ambient) { [weak self] node in
-            self.map { pal.srgb(forExt: $0.ext(of: node)) } ?? (0.5, 0.5, 0.5)
+            guard let self else { return (0.5, 0.5, 0.5) }
+            let e = self.ext(of: node)
+            let base = pal.srgb(forExt: e)
+            // Highlight mode: fade non-matching tiles toward the canvas so matches glow.
+            if let hl, e != hl {
+                return (base.r * 0.16 + bg.r * 0.5, base.g * 0.16 + bg.g * 0.5, base.b * 0.16 + bg.b * 0.5)
+            }
+            return base
         }
         guard let provider = CGDataProvider(data: Data(rgba) as CFData) else { return nil }
         let img = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32,
                           bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
                           bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
                           provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
-        cushionCache = img; cushionSize = size
+        cushionCache = img; cushionSize = size; cushionHighlight = highlightExt
         return img
     }
 
@@ -172,6 +224,29 @@ final class TreemapModel: ObservableObject {
         guard let index, node >= 0, node < index.nodes.count else { return nil }
         let n = index.nodes[node]
         return (index.path(of: node), n.isDir ? n.totalSize : n.ownSize)
+    }
+
+    /// Rich stats for the inspector panel. `nil` selection falls back to the scanned root, so
+    /// the panel always shows something useful.
+    func stats(for node: Int?) -> NodeStats? {
+        guard let index, !index.nodes.isEmpty else { return nil }
+        let i = node ?? 0
+        guard i >= 0, i < index.nodes.count, !index.nodes[i].deleted else { return nil }
+        let n = index.nodes[i]
+        let size = n.isDir ? n.totalSize : n.ownSize
+        let total = index.nodes.first?.totalSize ?? 0
+        let parent = Int(n.parent)
+        let parentTotal = parent >= 0 ? index.nodes[parent].totalSize : total
+        let e = ext(of: i)
+        let name = i == 0 ? (n.name.split(separator: "/").last.map(String.init) ?? n.name) : n.name
+        return NodeStats(
+            node: i, name: name, path: index.path(of: i), isDir: n.isDir, isRoot: i == 0,
+            size: size,
+            fractionOfTotal: total > 0 ? Double(size) / Double(total) : 0,
+            fractionOfParent: parentTotal > 0 ? Double(size) / Double(parentTotal) : 0,
+            subtreeFiles: n.subtreeFiles, subtreeItems: n.subtreeItems,
+            modTime: n.modTime, createTime: n.createTime,
+            ext: e, category: FilePalette.category(forExt: e))
     }
 
     /// Root of the directory tree (the scanned folder), or nil before a scan completes.
@@ -233,6 +308,24 @@ final class TreemapModel: ObservableObject {
         cachedTiles = []; cachedSize = .zero
         cushionCache = nil; cushionSize = .zero
     }
+}
+
+/// Inspector stats for one node — what the right-pane details panel renders.
+struct NodeStats {
+    let node: Int
+    let name: String
+    let path: String
+    let isDir: Bool
+    let isRoot: Bool
+    let size: UInt64
+    let fractionOfTotal: Double
+    let fractionOfParent: Double
+    let subtreeFiles: Int32
+    let subtreeItems: Int32
+    let modTime: Int64
+    let createTime: Int64
+    let ext: String
+    let category: FilePalette.Category
 }
 
 /// One row of the file-type legend.

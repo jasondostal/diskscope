@@ -12,6 +12,7 @@ struct ContentView: View {
     @State private var hover: HoverInfo?
     @State private var hasFDA = true
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         VStack(spacing: 0) {
@@ -58,12 +59,12 @@ struct ContentView: View {
                 }
             }
             Divider()
-            Button { theme.selectedID = Theme.customID } label: {
+            Button { theme.selectedID = Theme.customID; openSettings() } label: {
                 if theme.isCustom { Label("Custom", systemImage: "checkmark") } else { Text("Custom") }
             }
             Button("Customize This…") {
                 theme.customize(from: theme.selectedID)
-                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                openSettings()
             }
         } label: { Image(systemName: "paintpalette") }
         .menuStyle(.borderlessButton).frame(width: 34)
@@ -90,9 +91,13 @@ struct ContentView: View {
             VSplitView {
                 HSplitView {
                     TreeListView(model: model, selected: $selected)
-                        .frame(minWidth: 360, minHeight: 140)
-                    LegendView(model: model)
-                        .frame(minWidth: 180, idealWidth: 230, maxWidth: 320)
+                        .frame(minWidth: 320, minHeight: 140)
+                    VStack(spacing: 0) {
+                        DetailsView(model: model, selected: $selected)
+                        Divider().overlay(Color.white.opacity(0.08))
+                        LegendView(model: model)
+                    }
+                    .frame(minWidth: 250, idealWidth: 300, maxWidth: 400)
                 }
                 .frame(minHeight: 150)
                 TreemapCanvas(model: model, selected: $selected, hover: $hover)
@@ -112,19 +117,35 @@ struct ContentView: View {
         }
     }
 
+    /// Basename of the scanned root — the prominent identity in the header.
+    private var folderName: String {
+        let n = (model.path as NSString).lastPathComponent
+        return n.isEmpty ? model.path : n
+    }
+
     private var header: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
+            // Identity zone (left): app title · prominent folder name · subtle full path.
             Text("DiskScope").font(.headline)
             if model.state == .ready {
-                Text(model.path).font(.callout).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                Text(folderName).font(.callout).fontWeight(.semibold).lineLimit(1).fixedSize()
+                // The path is the only elastic element — it truncates first so nothing else jumps.
+                Text(model.path).font(.caption2).foregroundStyle(.tertiary)
+                    .lineLimit(1).truncationMode(.middle).layoutPriority(-1)
             }
-            Spacer()
+            Spacer(minLength: 12)
+            // Stats + controls zone (right). fixedSize on the stats keeps the numbers from ever
+            // truncating or wrapping; the Spacer absorbs length changes so the buttons stay put.
             if model.state == .ready {
                 Text("\(humanSize(model.totalSize)) · \(model.fileCount.formatted()) files · \(String(format: "%.1fs", model.scanSeconds))")
-                    .font(.callout).foregroundStyle(.secondary).monospacedDigit()
-                Button { model.scan(model.path) } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+                    .font(.callout).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).fixedSize()
+                // File actions grouped together — no theme control wedged between them.
+                HStack(spacing: 8) {
+                    Button { model.scan(model.path) } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+                    Button("Choose…") { chooseFolder() }
+                }
+                Divider().frame(height: 16)
                 themeMenu
-                Button("Choose…") { chooseFolder() }
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 9)
@@ -137,7 +158,7 @@ struct ContentView: View {
                 Spacer()
                 Text(humanSize(h.size)).monospacedDigit()
             } else {
-                Text(model.state == .ready ? "Hover a cell to inspect · click to select · pick a folder in the tree to highlight it" : " ")
+                Text(model.state == .ready ? "Hover to inspect · click to select · click a file type in the legend to isolate it" : " ")
                     .foregroundStyle(.tertiary)
                 Spacer()
             }
@@ -166,23 +187,27 @@ struct TreeListView: View {
 
     var body: some View {
         if let root = model.makeRootNode() {
-            VStack(spacing: 0) {
-                treeHeader
-                Divider().overlay(Color.white.opacity(0.08))
-                ScrollViewReader { proxy in
-                    List(selection: $selected) {
+            // Structured exactly like LegendView (a bare List with a Section header) — that's the
+            // one shape that DOESN'T get macOS's phantom top inset. Wrapping the List in a VStack
+            // or a safeAreaInset both reintroduced the big blank band above the rows.
+            ScrollViewReader { proxy in
+                List(selection: $selected) {
+                    Section {
                         NodeRows(node: root, model: model, expanded: $expanded, depth: 0)
+                    } header: {
+                        treeHeader
                     }
-                    .listStyle(.inset)
-                    .environment(\.defaultMinListRowHeight, 22)
-                    .onChange(of: model.path) { _, _ in expanded = [0] }
-                    .onChange(of: selected) { _, sel in
-                        guard let sel else { return }
-                        // Reveal: expand the selection's ancestor folders, then scroll to it.
-                        for ancestor in model.ancestors(of: sel).dropLast() { expanded.insert(ancestor) }
-                        DispatchQueue.main.async {
-                            withAnimation(.easeInOut(duration: 0.15)) { proxy.scrollTo(sel, anchor: .center) }
-                        }
+                }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .environment(\.defaultMinListRowHeight, 22)
+                .onChange(of: model.path) { _, _ in expanded = [0] }
+                .onChange(of: selected) { _, sel in
+                    guard let sel else { return }
+                    // Reveal: expand the selection's ancestor folders, then scroll to it.
+                    for ancestor in model.ancestors(of: sel).dropLast() { expanded.insert(ancestor) }
+                    DispatchQueue.main.async {
+                        withAnimation(.easeInOut(duration: 0.15)) { proxy.scrollTo(sel, anchor: .center) }
                     }
                 }
             }
@@ -285,6 +310,8 @@ func iconForExt(_ e: String) -> String {
     case .code, .web: return "chevron.left.forwardslash.chevron.right"
     case .document: return "doc.text"
     case .data: return "tablecells"
+    case .model: return "brain"
+    case .model3d: return "cube"
     case .binary, .system: return "gearshape"
     case .other: return "doc"
     }
@@ -303,14 +330,92 @@ struct PercentBar: View {
     }
 }
 
-// MARK: - Legend
+// MARK: - Details (inspector)
+
+/// Right-pane top: stats for the selected file/folder (falls back to the scanned root).
+struct DetailsView: View {
+    @ObservedObject var model: TreemapModel
+    @Binding var selected: Int?
+
+    var body: some View {
+        let s = model.stats(for: selected)
+        VStack(alignment: .leading, spacing: 7) {
+            if let s {
+                HStack(spacing: 8) {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(s.isDir ? Color.secondary.opacity(0.5) : model.palette.color(s.category))
+                        .frame(width: 13, height: 13)
+                    Image(systemName: s.isDir ? "folder.fill" : iconForExt(s.ext))
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text(s.name).font(.headline).lineLimit(2).truncationMode(.middle)
+                }
+                Text(typeLine(s)).font(.caption).foregroundStyle(.secondary)
+                Text(s.path).font(.caption2).foregroundStyle(.tertiary)
+                    .lineLimit(2).truncationMode(.middle).textSelection(.enabled)
+
+                Divider().overlay(Color.white.opacity(0.06)).padding(.vertical, 1)
+
+                // Two-column stat grid keeps the panel short so the legend below it breathes.
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 16, verticalSpacing: 5) {
+                    GridRow { cell("Size", humanSize(s.size)); cell("Disk", pct(s.fractionOfTotal)) }
+                    if s.isDir {
+                        GridRow { cell("Files", s.subtreeFiles.formatted()); cell("Items", s.subtreeItems.formatted()) }
+                    }
+                    GridRow { cell("Modified", shortDate(s.modTime)); cell("Created", shortDate(s.createTime)) }
+                }
+                if !s.isRoot { shareOfParent(s) }
+
+                if !s.isRoot, let sel = selected {
+                    HStack(spacing: 8) {
+                        Button { model.reveal(sel) } label: { Label("Reveal", systemImage: "folder") }
+                        Button { model.open(sel) } label: { Label("Open", systemImage: "arrow.up.forward.app") }
+                        Spacer()
+                        Button(role: .destructive) { model.moveToTrash(sel); selected = nil } label: {
+                            Image(systemName: "trash")
+                        }
+                    }
+                    .controlSize(.small).buttonStyle(.bordered).padding(.top, 3)
+                }
+            } else {
+                Text("No selection").foregroundStyle(.tertiary).font(.callout)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+    }
+
+    private func typeLine(_ s: NodeStats) -> String {
+        if s.isDir { return s.isRoot ? "Scanned folder" : "Folder" }
+        let desc = FilePalette.description(forExt: s.ext)
+        return s.ext.isEmpty ? desc : "\(desc) · .\(s.ext)"
+    }
+    private func pct(_ f: Double) -> String { String(format: "%.1f%%", f * 100) }
+
+    private func cell(_ label: String, _ value: String) -> some View {
+        HStack(spacing: 5) {
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+            Text(value).font(.caption).monospacedDigit()
+        }
+    }
+    private func shareOfParent(_ s: NodeStats) -> some View {
+        HStack(spacing: 5) {
+            Text("Share of parent").font(.caption2).foregroundStyle(.secondary)
+            Text(pct(s.fractionOfParent)).font(.caption).monospacedDigit()
+            PercentBar(fraction: s.fractionOfParent).frame(width: 50, height: 6)
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+// MARK: - Legend (click a type to isolate it on the treemap)
 
 struct LegendView: View {
     @ObservedObject var model: TreemapModel
     var body: some View {
         List {
-            Section("File types — \(model.legend.count)") {
+            Section {
                 ForEach(model.legend) { e in
+                    let isHL = model.highlightExt == e.ext && !e.ext.hasPrefix("·")
                     HStack(spacing: 7) {
                         RoundedRectangle(cornerRadius: 2)
                             .fill(model.palette.color(FilePalette.category(forExt: e.ext.hasPrefix("·") ? "" : e.ext)))
@@ -321,6 +426,7 @@ struct LegendView: View {
                                 .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
                         }
                         Spacer(minLength: 4)
+                        if isHL { Image(systemName: "eye.fill").font(.caption2).foregroundStyle(.tint) }
                         VStack(alignment: .trailing, spacing: 1) {
                             Text(humanSize(e.bytes)).font(.caption).monospacedDigit()
                             Text(String(format: "%.1f%%", e.fraction * 100))
@@ -328,10 +434,26 @@ struct LegendView: View {
                         }
                     }
                     .padding(.vertical, 1)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        if e.ext.hasPrefix("·") { model.highlightExt = nil }
+                        else { model.highlightExt = isHL ? nil : e.ext }
+                    }
+                    .listRowBackground(isHL ? Color.accentColor.opacity(0.18) : Color.clear)
+                }
+            } header: {
+                HStack {
+                    Text("File types — \(model.legend.count)")
+                    Spacer()
+                    if model.highlightExt != nil {
+                        Button("Show all") { model.highlightExt = nil }
+                            .font(.caption2).buttonStyle(.plain).foregroundStyle(.tint)
+                    }
                 }
             }
         }
-        .listStyle(.sidebar)
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)   // let the theme's canvas show through, like the tree
     }
 }
 

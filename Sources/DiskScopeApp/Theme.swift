@@ -31,6 +31,17 @@ struct ThemePalette {
         }
         return ThemePalette(overrides: o, ambient: ambient, background: bg)
     }
+
+    /// Build a fully-specified palette from a curated color scheme: every category maps to its
+    /// own hex (converted into our OKLCH pipeline), plus a background hex. This is how the real
+    /// themes get GENUINELY different hue families — not the same hues at different brightness.
+    static func curated(_ map: [FilePalette.Category: String], bg: String, ambient: Double) -> ThemePalette {
+        var o: [FilePalette.Category: FilePalette.OKLCH] = [:]
+        for cat in FilePalette.Category.allCases where map[cat] != nil {
+            o[cat] = FilePalette.oklch(hex: map[cat]!)
+        }
+        return ThemePalette(overrides: o, ambient: ambient, background: FilePalette.srgb(hex: bg))
+    }
 }
 
 struct Theme: Identifiable {
@@ -41,16 +52,62 @@ struct Theme: Identifiable {
     static let customID = "custom"
 
     static let presets: [Theme] = [
-        Theme(id: "nocturne", name: "Nocturne",
-              palette: ThemePalette(overrides: [:], ambient: 0.58, background: (0.043, 0.051, 0.063))),
-        Theme(id: "vivid", name: "Vivid",
-              palette: .variant(chroma: 1.7, lightness: 0.02)),
-        Theme(id: "slate", name: "Slate",
-              palette: .variant(chroma: 0.3, lightness: 0.02, bg: (0.05, 0.055, 0.062))),
-        Theme(id: "ember", name: "Ember",
-              palette: .variant(chroma: 1.2, lightness: 0.0, bg: (0.07, 0.05, 0.045), ambient: 0.55)),
-        Theme(id: "abyss", name: "Abyss",
-              palette: .variant(chroma: 0.9, lightness: 0.0, bg: (0.02, 0.03, 0.05), ambient: 0.5)),
+        // Spectrum — vivid even-spaced base (empty overrides use FilePalette's own colors).
+        Theme(id: "spectrum", name: "Spectrum",
+              palette: ThemePalette(overrides: [:], ambient: 0.58, background: FilePalette.srgb(hex: "0b0d10"))),
+        // Cairn — near-black canvas with Cairn's "memory jellybean" colors (read from its
+        // Memory-Type-Growth legend: code-snippet blue, debug/progress green, decision/research
+        // amber, design/rule purple, learning crimson, note sky-blue).
+        Theme(id: "cairn", name: "Cairn", palette: .curated([
+            .code: "4d9bff",     // code-snippet blue
+            .web: "2ed9c4",      // teal
+            .image: "ff5d8f",    // rose
+            .video: "ff4d6d",    // learning crimson
+            .audio: "2ed99a",    // debug green
+            .archive: "efa83a",  // decision amber
+            .document: "b06bff", // design purple
+            .data: "5ab0ff",     // note sky-blue
+            .model: "d24dff",    // vivid magenta (his giants)
+            .model3d: "7c6bff",  // indigo
+            .binary: "ff8a3d",   // orange
+            .system: "6b7280", .other: "8a8f9c",
+        ], bg: "0a0a0c", ambient: 0.52)),
+        // Dracula — purple/pink/cyan on charcoal.
+        Theme(id: "dracula", name: "Dracula", palette: .curated([
+            .code: "bd93f9", .web: "8be9fd", .image: "ff79c6", .video: "ff5555", .audio: "50fa7b",
+            .archive: "f1fa8c", .document: "ffb86c", .data: "80d4ff", .model: "d68bff",
+            .model3d: "7aa2ff", .binary: "ff8c5a", .system: "6272a4", .other: "8b90a8",
+        ], bg: "282a36", ambient: 0.60)),
+        // Catppuccin Mocha — soft pastels on deep mauve-black.
+        Theme(id: "catppuccin", name: "Catppuccin", palette: .curated([
+            .code: "89b4fa", .web: "89dceb", .image: "f5c2e7", .video: "f38ba8", .audio: "a6e3a1",
+            .archive: "f9e2af", .document: "fab387", .data: "94e2d5", .model: "cba6f7",
+            .model3d: "b4befe", .binary: "eba0ac", .system: "9399b2", .other: "7f849c",
+        ], bg: "1e1e2e", ambient: 0.62)),
+        // Nord — calm arctic blues, teals, muted aurora.
+        Theme(id: "nord", name: "Nord", palette: .curated([
+            .code: "81a1c1", .web: "88c0d0", .image: "b48ead", .video: "bf616a", .audio: "a3be8c",
+            .archive: "ebcb8b", .document: "d08770", .data: "8fbcbb", .model: "c98fb5",
+            .model3d: "5e81ac", .binary: "d8a07a", .system: "6b7488", .other: "7b8394",
+        ], bg: "2e3440", ambient: 0.58)),
+        // Solarized — the iconic teal-dark canvas with warm accents.
+        Theme(id: "solarized", name: "Solarized", palette: .curated([
+            .code: "268bd2", .web: "2aa198", .image: "d33682", .video: "dc322f", .audio: "859900",
+            .archive: "b58900", .document: "cb4b16", .data: "4bb3a5", .model: "c044a0",
+            .model3d: "6c71c4", .binary: "d2691e", .system: "586e75", .other: "657b83",
+        ], bg: "002b36", ambient: 0.55)),
+        // Synthwave — neon on deep purple-black. Maximum fun.
+        Theme(id: "synthwave", name: "Synthwave", palette: .curated([
+            .code: "a679ff", .web: "36f9f6", .image: "ff7edb", .video: "ff3cab", .audio: "72f1b8",
+            .archive: "fede5d", .document: "ff8b39", .data: "2de2e6", .model: "ff5fd2",
+            .model3d: "7b6cff", .binary: "ff6f3c", .system: "6d5a9c", .other: "9d8bbf",
+        ], bg: "1a0b2e", ambient: 0.55)),
+        // Gruvbox — warm retro earth tones.
+        Theme(id: "gruvbox", name: "Gruvbox", palette: .curated([
+            .code: "83a598", .web: "8ec07c", .image: "d3869b", .video: "fb4934", .audio: "b8bb26",
+            .archive: "fabd2f", .document: "fe8019", .data: "689d6a", .model: "e08ba0",
+            .model3d: "7daeb8", .binary: "d65d0e", .system: "928374", .other: "a89984",
+        ], bg: "282828", ambient: 0.58)),
     ]
     static var `default`: Theme { presets[0] }
 }
@@ -108,14 +165,14 @@ final class ThemeManager: ObservableObject {
     /// Switch to the custom theme, seeding its global knobs from the named preset so the user
     /// starts from "this preset, now editable" rather than from scratch.
     func customize(from presetID: String) {
-        switch presetID {
-        case "vivid": custom.chroma = 1.7; custom.lightness = 0.02
-        case "slate": custom.chroma = 0.3; custom.lightness = 0.02; custom.bgL = 0.055
-        case "ember": custom.chroma = 1.2; custom.lightness = 0.0; custom.ambient = 0.55; custom.bgL = 0.06; custom.bgHue = 40
-        case "abyss": custom.chroma = 0.9; custom.lightness = 0.0; custom.ambient = 0.5; custom.bgL = 0.03; custom.bgHue = 250
-        default: break // nocturne ≈ defaults
-        }
-        custom.overrides = [:]
+        let p = (Theme.presets.first { $0.id == presetID } ?? Theme.default).palette
+        // Seed the custom theme with the preset's exact per-category colors (so the swatch grid
+        // starts from "this theme, now editable"), plus its ambient + OKLCH-decomposed background.
+        custom.overrides = p.overrides
+        custom.ambient = p.ambient
+        let bg = FilePalette.oklch(fromSRGB: p.background)
+        custom.bgL = bg.L; custom.bgChroma = bg.C; custom.bgHue = bg.H
+        custom.chroma = 1.0; custom.lightness = 0.0
         selectedID = Theme.customID
     }
 
