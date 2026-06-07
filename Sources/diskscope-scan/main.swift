@@ -9,6 +9,14 @@ func cliExt(_ n: String) -> String {
     return String(n[n.index(after: d)...]).lowercased()
 }
 
+/// Resolve the active palette for the CLI render modes (--cushion / --term): an explicit theme
+/// id, else $DISKSCOPE_THEME, else the default. Unknown ids fall back to the default palette.
+func resolvePalette(_ explicit: String? = nil) -> FilePalette.Palette {
+    let id = explicit ?? ProcessInfo.processInfo.environment["DISKSCOPE_THEME"]
+    if let id, let t = FilePalette.theme(id: id) { return t.palette }
+    return FilePalette.themePresets[0].palette
+}
+
 func writePNG(_ rgba: [UInt8], width: Int, height: Int, to path: String) {
     guard let provider = CGDataProvider(data: Data(rgba) as CFData),
           let img = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
@@ -27,9 +35,13 @@ func writePNG(_ rgba: [UInt8], width: Int, height: Int, to path: String) {
 // diskscope-scan --watch <path>        — build index, watch live, print reconcile deltas
 //   workers omitted or 1 -> serial scanner; >1 -> parallel worker pool.
 
-// diskscope-scan --tui <path>  — interactive terminal UI (needs a truecolor terminal).
+// diskscope-scan --tui <path> [theme]  — interactive terminal UI (needs a truecolor terminal).
+// Optional third arg picks a theme by id (e.g. "halloween", "winter") from the shared library.
 if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--tui" {
-    runTUI(path: CommandLine.arguments[2])
+    let themeID = CommandLine.arguments.count > 3
+        ? CommandLine.arguments[3]
+        : ProcessInfo.processInfo.environment["DISKSCOPE_THEME"]
+    runTUI(path: CommandLine.arguments[2], theme: themeID)
 }
 
 if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--watch" {
@@ -104,10 +116,11 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--cushion" {
     DiskScopeScanner.scan(path: target, into: index)
     index.aggregate()
     let W = 1600, H = 1000
+    let palette = resolvePalette()
     let tiles = Treemap.layout(index, root: 0, in: Rect(x: 0, y: 0, w: Double(W), h: Double(H)),
                                minSide: 1.5, cushionHeight: 0.42)
-    let rgba = Treemap.renderCushionRGBA(tiles: tiles, width: W, height: H, ambient: 0.58) { node in
-        FilePalette.srgb(forExt: cliExt(index.nodes[node].name))
+    let rgba = Treemap.renderCushionRGBA(tiles: tiles, width: W, height: H, ambient: palette.ambient) { node in
+        palette.srgb(forExt: cliExt(index.nodes[node].name))
     }
     writePNG(rgba, width: W, height: H, to: out)
     print("cushion: \(tiles.count) tiles → \(out)")
@@ -131,10 +144,11 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--term" {
     let index = FileIndex()
     DiskScopeScanner.scan(path: target, into: index)
     index.aggregate()
+    let palette = resolvePalette()
     let tiles = Treemap.layout(index, root: 0, in: Rect(x: 0, y: 0, w: Double(W), h: Double(H)),
                                minSide: 1, cushionHeight: 0.42)
-    let rgba = Treemap.renderCushionRGBA(tiles: tiles, width: W, height: H, ambient: 0.58) { node in
-        FilePalette.srgb(forExt: cliExt(index.nodes[node].name))
+    let rgba = Treemap.renderCushionRGBA(tiles: tiles, width: W, height: H, ambient: palette.ambient) { node in
+        palette.srgb(forExt: cliExt(index.nodes[node].name))
     }
     func px(_ x: Int, _ y: Int) -> (Int, Int, Int) {
         let i = (y * W + x) * 4

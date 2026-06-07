@@ -122,13 +122,14 @@ private func tuiDate(_ epoch: Int64) -> String {
 
 /// The treemap of `root` as half-block text rows (two vertical pixels per character cell).
 /// Shared shape with --term; here it's composed into the right pane of the split view.
-private func cushionRows(_ index: FileIndex, root: Int, width: Int, rows: Int) -> [String] {
+private func cushionRows(_ index: FileIndex, root: Int, width: Int, rows: Int,
+                         palette: FilePalette.Palette) -> [String] {
     guard width > 0, rows > 0 else { return [] }
     let H = max(2, rows * 2)
     let tiles = Treemap.layout(index, root: root, in: Rect(x: 0, y: 0, w: Double(width), h: Double(H)),
                                minSide: 1, cushionHeight: 0.42)
-    let px = Treemap.renderCushionRGBA(tiles: tiles, width: width, height: H, ambient: 0.58) { node in
-        FilePalette.srgb(forExt: cliExt(index.nodes[node].name))
+    let px = Treemap.renderCushionRGBA(tiles: tiles, width: width, height: H, ambient: palette.ambient) { node in
+        palette.srgb(forExt: cliExt(index.nodes[node].name))
     }
     var lines: [String] = []
     var y = 0
@@ -150,6 +151,7 @@ private func cushionRows(_ index: FileIndex, root: Int, width: Int, rows: Int) -
 final class TUI {
     private let index: FileIndex
     private let rootPath: String
+    private let palette: FilePalette.Palette   // active theme (shared with the GUI library)
     private var cur = 0                 // node of the folder currently shown
     private var kids: [Int] = []        // cur's children, largest first
     private var sel = 0                 // index into kids
@@ -159,9 +161,10 @@ final class TUI {
     private let stateLock = NSLock()    // guards index/kids vs the FSEvents queue
     private var confirmMessage: String? // when set, shown in the footer (e.g. trash confirm)
 
-    init(index: FileIndex, rootPath: String) {
+    init(index: FileIndex, rootPath: String, palette: FilePalette.Palette) {
         self.index = index
         self.rootPath = rootPath
+        self.palette = palette
         refreshKids()
     }
 
@@ -313,7 +316,7 @@ final class TUI {
 
         // Right pane: cushion treemap of the focused folder.
         let mapRows = bodyRows
-        let map = cushionRows(index, root: cur, width: max(1, rightW), rows: mapRows)
+        let map = cushionRows(index, root: cur, width: max(1, rightW), rows: mapRows, palette: palette)
 
         // Left pane: scrollable child list. Keep the selection in view.
         if sel < top { top = sel }
@@ -357,7 +360,7 @@ final class TUI {
         let isDir = n.isDir
         let size = isDir ? n.totalSize : n.ownSize
         let pct = Double(size) / Double(max(1, sizeOf(cur))) * 100
-        let (sr, sg, sb) = isDir ? (150, 150, 160) : rgb(FilePalette.srgb(forExt: cliExt(n.name)))
+        let (sr, sg, sb) = isDir ? (150, 150, 160) : rgb(palette.srgb(forExt: cliExt(n.name)))
 
         var suffix = "  \(tuiHuman(size)) · \(String(format: "%.1f", pct))%"
         if isDir { suffix += " · \(n.subtreeFiles) files · \(n.subtreeItems) items" }
@@ -380,7 +383,7 @@ final class TUI {
         let size = isDir ? n.totalSize : n.ownSize
         let frac = Double(size) / Double(parentTotal)
 
-        let (sr, sg, sb) = isDir ? (150, 150, 160) : rgb(FilePalette.srgb(forExt: cliExt(n.name)))
+        let (sr, sg, sb) = isDir ? (150, 150, 160) : rgb(palette.srgb(forExt: cliExt(n.name)))
         let swatch = "\u{1b}[38;2;\(sr);\(sg);\(sb)m\(isDir ? "▸" : "·")\u{1b}[0m"
 
         let sizeStr = tuiHuman(size)
@@ -440,12 +443,24 @@ private func visibleWidth(_ s: String) -> Int {
 }
 
 /// Entry point from main.swift: build the index (parallel) then run the interactive UI.
-func runTUI(path rawPath: String) -> Never {
+func runTUI(path rawPath: String, theme themeID: String? = nil) -> Never {
     var rbuf = [CChar](repeating: 0, count: Int(PATH_MAX))
     let root = realpath(rawPath, &rbuf) != nil ? String(cString: rbuf) : rawPath
+    // Resolve the theme from the shared Core library; unknown id falls back to the default,
+    // with a heads-up on stderr (it scrolls away once the alt screen takes over).
+    let theme: FilePalette.Theme
+    if let id = themeID {
+        if let t = FilePalette.theme(id: id) { theme = t }
+        else {
+            FileHandle.standardError.write("unknown theme '\(id)'; using \(FilePalette.themePresets[0].name)\n".data(using: .utf8)!)
+            theme = FilePalette.themePresets[0]
+        }
+    } else {
+        theme = FilePalette.themePresets[0]
+    }
     FileHandle.standardError.write("indexing \(root)…\n".data(using: .utf8)!)
     let index = ParallelIndexBuilder.build(root: root)
     index.aggregate()
-    TUI(index: index, rootPath: root).run()
+    TUI(index: index, rootPath: root, palette: theme.palette).run()
     exit(0)
 }
