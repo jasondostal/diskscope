@@ -34,6 +34,18 @@ the engineering: DiskScope builds it with `getattrlistbulk(2)` and a parallel di
 - **Other front-ends on the same engine** — an interactive **TUI** (`--tui`), plus SVG/PNG and
   truecolor-terminal treemap renderers, and a benchmarking CLI.
 
+## Install
+
+**Homebrew (recommended):**
+
+```sh
+brew install --cask jasondostal/tap/diskscope
+```
+
+**Or grab the DMG** from the [latest release](https://github.com/jasondostal/diskscope/releases/latest). Direct downloads aren't notarized yet, so macOS will flag it as from an unidentified developer — right-click the app → **Open** the first time (or **Open Anyway** in System Settings → Privacy & Security). Homebrew handles this for you.
+
+Or **build from source** — see [Build & run](#build--run).
+
 ## The scan
 
 Measured on an M5 Pro (Apple Silicon), Data volume, ~1.71M entries, warm cache:
