@@ -3,3 +3,4 @@ dist/
 Packaging/AppIcon.iconset/
 Packaging/icon-1024.png
 *.dmg
+.DS_Store
