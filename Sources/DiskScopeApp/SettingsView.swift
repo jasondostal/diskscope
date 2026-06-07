@@ -11,7 +11,7 @@ struct SettingsView: View {
         TabView {
             appearance.tabItem { Label("Appearance", systemImage: "paintpalette") }
         }
-        .frame(width: 460, height: theme.isCustom ? 660 : 320)
+        .frame(width: 460, height: theme.isCustom ? 700 : 400)
     }
 
     private var appearance: some View {
@@ -53,6 +53,16 @@ struct SettingsView: View {
                     Text("Chunky").font(.caption2)
                 }
                 Text("Smallest cell the treemap draws (\(Int(settings.minTileSize)) px). Lower shows more tiny files.")
+                    .font(.caption).foregroundStyle(.secondary)
+
+                Divider().padding(.vertical, 2)
+
+                Toggle("Fade old files by age", isOn: $theme.recency.enabled)
+                if theme.recency.enabled {
+                    labeledSlider("Strength", $theme.recency.strength, 0...1, fmt: "%.2f")
+                    labeledSlider("Stale after", $theme.recency.horizonDays, 30...1095, fmt: "%.0f d")
+                }
+                Text("A layer over any theme: files untouched for a while drain toward grey (recent = vivid), so big stale files to clean up pop out. Doesn't change your theme.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             .formStyle(.grouped)

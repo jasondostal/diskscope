@@ -83,12 +83,18 @@ final class ThemeManager: ObservableObject {
     @Published var custom: CustomThemeParams {
         didSet { persistCustom(); paletteRevision += 1 }
     }
+    /// Optional recency-shading LAYER — drains color from old files. Composes over any theme;
+    /// off by default. Bumps paletteRevision so the treemap re-renders live.
+    @Published var recency: FilePalette.RecencyShading {
+        didSet { persistRecency(); paletteRevision += 1 }
+    }
     /// Bumped on any change that affects the active palette — the views watch this to re-tint.
     @Published private(set) var paletteRevision = 0
 
     init() {
         selectedID = UserDefaults.standard.string(forKey: "diskscope.theme") ?? Theme.default.id
         custom = ThemeManager.loadCustom()
+        recency = ThemeManager.loadRecency()
     }
 
     var isCustom: Bool { selectedID == Theme.customID }
@@ -137,5 +143,22 @@ final class ThemeManager: ObservableObject {
             if let cat = FilePalette.Category(rawValue: raw) { p.overrides[cat] = FilePalette.OKLCH(lch[0], lch[1], lch[2]) }
         }
         return p
+    }
+
+    // MARK: - Recency-shading persistence
+
+    private func persistRecency() {
+        let d = UserDefaults.standard
+        d.set(recency.enabled, forKey: "diskscope.recency.enabled")
+        d.set(recency.strength, forKey: "diskscope.recency.strength")
+        d.set(recency.horizonDays, forKey: "diskscope.recency.horizonDays")
+    }
+
+    private static func loadRecency() -> FilePalette.RecencyShading {
+        let d = UserDefaults.standard
+        guard d.object(forKey: "diskscope.recency.enabled") != nil else { return FilePalette.RecencyShading() }
+        return FilePalette.RecencyShading(enabled: d.bool(forKey: "diskscope.recency.enabled"),
+                                          strength: d.double(forKey: "diskscope.recency.strength"),
+                                          horizonDays: d.double(forKey: "diskscope.recency.horizonDays"))
     }
 }

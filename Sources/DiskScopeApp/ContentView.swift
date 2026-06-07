@@ -27,10 +27,14 @@ struct ContentView: View {
         .frame(minWidth: 860, minHeight: 600)
         .onAppear {
             model.setPalette(theme.current.palette)
+            model.setRecency(theme.recency)
             model.setMinSide(settings.minTileSize)
             hasFDA = FullDiskAccess.granted()
         }
-        .onChange(of: theme.paletteRevision) { _, _ in model.setPalette(theme.current.palette) }
+        .onChange(of: theme.paletteRevision) { _, _ in
+            model.setPalette(theme.current.palette)
+            model.setRecency(theme.recency)
+        }
         .onChange(of: settings.minTileSize) { _, v in model.setMinSide(v) }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { hasFDA = FullDiskAccess.granted() } // re-check after returning from Settings

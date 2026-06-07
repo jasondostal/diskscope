@@ -75,6 +75,16 @@ final class TreemapModel: ObservableObject {
         revision += 1
     }
 
+    /// Optional recency-shading layer (off by default) — drains color from old files. Pushed in
+    /// from ThemeManager; only the cushion bitmap is affected, not the layout.
+    var recency = FilePalette.RecencyShading()
+    func setRecency(_ r: FilePalette.RecencyShading) {
+        guard r != recency else { return }
+        recency = r
+        cushionCache = nil
+        revision += 1
+    }
+
     /// Minimum on-screen cell size before the treemap stops subdividing (from Settings).
     var minSide: Double = 2
     func setMinSide(_ v: Double) {
@@ -225,11 +235,15 @@ final class TreemapModel: ObservableObject {
         let pal = palette
         let hl = highlightExt
         let bg = pal.background
+        let rec = recency
+        let now = Int64(Date().timeIntervalSince1970)
         let rgba = Treemap.renderCushionRGBA(tiles: tiles(for: size), width: w, height: h,
                                              background: pal.background, ambient: pal.ambient) { [weak self] node in
             guard let self else { return (0.5, 0.5, 0.5) }
             let e = self.ext(of: node)
-            let base = pal.srgb(forExt: e)
+            // Theme color, then the optional recency layer (identity when disabled).
+            let base = rec.apply(pal.srgb(forExt: e),
+                                 modTime: self.index?.nodes[node].modTime ?? 0, now: now)
             // Highlight mode: fade non-matching tiles toward the canvas so matches glow.
             if let hl, e != hl {
                 return (base.r * 0.16 + bg.r * 0.5, base.g * 0.16 + bg.g * 0.5, base.b * 0.16 + bg.b * 0.5)

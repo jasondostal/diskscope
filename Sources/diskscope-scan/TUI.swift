@@ -54,7 +54,7 @@ private func tuiSize() -> (cols: Int, rows: Int) {
 
 // MARK: - Input
 
-enum TUIKey: Equatable { case up, down, left, right, top, bottom, enter, back, refresh, trash, theme, open, quit, other }
+enum TUIKey: Equatable { case up, down, left, right, top, bottom, enter, back, refresh, trash, theme, open, ageToggle, ageDown, ageUp, quit, other }
 
 /// Pure byte-sequence → key decode (escape sequences + vim/letter keys). Kept free of I/O
 /// so the mapping is obvious and could be unit-tested in isolation.
@@ -83,9 +83,12 @@ func decodeKey(_ b: [UInt8]) -> TUIKey {
     case 0x47:              return .bottom  // G
     case 0x72:              return .refresh // r
     case 0x74, 0x54:        return .trash   // t / T
-    case 0x63:              return .theme   // c — theme picker
-    case 0x6f, 0x4f:        return .open    // o / O — scan another folder
-    case 0x1b:              return .back    // bare Esc → back / cancel
+    case 0x63:              return .theme     // c — theme picker
+    case 0x6f, 0x4f:        return .open      // o / O — scan another folder
+    case 0x61:              return .ageToggle // a — toggle recency shading
+    case 0x2d:              return .ageDown   // - — weaker
+    case 0x3d, 0x2b:        return .ageUp     // = / + — stronger
+    case 0x1b:              return .back      // bare Esc → back / cancel
     default:                return .other
     }
 }
@@ -126,13 +129,15 @@ private func tuiDate(_ epoch: Int64) -> String {
 /// The treemap of `root` as half-block text rows (two vertical pixels per character cell).
 /// Shared shape with --term; here it's composed into the right pane of the split view.
 private func cushionRows(_ index: FileIndex, root: Int, width: Int, rows: Int,
-                         palette: FilePalette.Palette) -> [String] {
+                         palette: FilePalette.Palette, recency: FilePalette.RecencyShading) -> [String] {
     guard width > 0, rows > 0 else { return [] }
     let H = max(2, rows * 2)
+    let now = Int64(Date().timeIntervalSince1970)
     let tiles = Treemap.layout(index, root: root, in: Rect(x: 0, y: 0, w: Double(width), h: Double(H)),
                                minSide: 1, cushionHeight: 0.42)
     let px = Treemap.renderCushionRGBA(tiles: tiles, width: width, height: H, ambient: palette.ambient) { node in
-        palette.srgb(forExt: cliExt(index.nodes[node].name))
+        recency.apply(palette.srgb(forExt: cliExt(index.nodes[node].name)),
+                      modTime: index.nodes[node].modTime, now: now)
     }
     var lines: [String] = []
     var y = 0
@@ -156,6 +161,7 @@ final class TUI {
     private var rootPath: String
     private var palette: FilePalette.Palette   // active theme (shared with the GUI library)
     private var themeID: String                // current theme id (picker + persistence)
+    private var recency: FilePalette.RecencyShading // optional age-shading layer (toggle with 'a')
     private var cur = 0                 // node of the folder currently shown
     private var kids: [Int] = []        // cur's children, largest first
     private var sel = 0                 // index into kids
@@ -170,7 +176,20 @@ final class TUI {
         self.rootPath = rootPath
         self.palette = theme.palette
         self.themeID = theme.id
+        self.recency = TUI.loadRecency()
         refreshKids()
+    }
+
+    private func persistRecency() {
+        let d = UserDefaults.standard
+        d.set(recency.enabled, forKey: "diskscope.recency.enabled")
+        d.set(recency.strength, forKey: "diskscope.recency.strength")
+    }
+    private static func loadRecency() -> FilePalette.RecencyShading {
+        let d = UserDefaults.standard
+        guard d.object(forKey: "diskscope.recency.enabled") != nil else { return FilePalette.RecencyShading() }
+        return FilePalette.RecencyShading(enabled: d.bool(forKey: "diskscope.recency.enabled"),
+                                          strength: d.double(forKey: "diskscope.recency.strength"))
     }
 
     private func refreshKids() {
@@ -204,6 +223,9 @@ final class TUI {
             case .enter, .right: descend()
             case .left, .back:   ascend()
             case .refresh: reconcileVisible()
+            case .ageToggle: recency.enabled.toggle(); persistRecency()
+            case .ageDown:   recency.strength = max(0.0, recency.strength - 0.1); persistRecency()
+            case .ageUp:     recency.strength = min(1.0, recency.strength + 0.1); persistRecency()
             case .quit, .trash, .theme, .open, .other: break
             }
             dirty = true
@@ -443,7 +465,7 @@ final class TUI {
 
         // Right pane: cushion treemap of the focused folder.
         let mapRows = bodyRows
-        let map = cushionRows(index, root: cur, width: max(1, rightW), rows: mapRows, palette: palette)
+        let map = cushionRows(index, root: cur, width: max(1, rightW), rows: mapRows, palette: palette, recency: recency)
 
         // Left pane: scrollable child list. Keep the selection in view.
         if sel < top { top = sel }
@@ -469,7 +491,8 @@ final class TUI {
         if let cm = confirmMessage {
             out += "\u{1b}[48;2;130;95;30m\u{1b}[1m" + pad(" " + cm, cols) + "\u{1b}[0m\u{1b}[K"
         } else {
-            let hint = " ↑↓ move · → in · ← up · o open · c theme · t trash · r refresh · q quit "
+            let age = recency.enabled ? "a age \(Int((recency.strength * 100).rounded()))% −/+" : "a age"
+            let hint = " ↑↓ move · → in · ← up · o open · c theme · \(age) · t trash · q quit "
             out += "\u{1b}[7m" + pad(hint, cols) + "\u{1b}[0m\u{1b}[K"
         }
         out += "\u{1b}[J" // clear anything below
