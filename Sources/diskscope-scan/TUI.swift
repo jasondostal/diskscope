@@ -127,20 +127,39 @@ private func tuiDate(_ epoch: Int64) -> String {
     return tuiDateFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(epoch)))
 }
 
+/// Is `node` inside the subtree rooted at `sub` (inclusive)? Walks parent links upward,
+/// bounded by the treemap `root` so it stays O(depth) — depth here is tiny.
+private func nodeInSubtree(_ index: FileIndex, _ node: Int, sub: Int, root: Int) -> Bool {
+    var n = node
+    while true {
+        if n == sub { return true }
+        if n == root { return false }
+        let p = index.nodes[n].parent
+        if p < 0 { return false }
+        n = Int(p)
+    }
+}
+
 /// The treemap of `root` as half-block text rows (two vertical pixels per character cell).
 /// Shared shape with --term; here it's composed into the right pane of the split view.
 private func cushionRows(_ index: FileIndex, root: Int, width: Int, rows: Int,
                          palette: FilePalette.Palette, recency: FilePalette.RecencyShading,
-                         depth: FilePalette.DepthShading) -> [String] {
+                         depth: FilePalette.DepthShading, highlight: Int? = nil) -> [String] {
     guard width > 0, rows > 0 else { return [] }
     let H = max(2, rows * 2)
     let now = Int64(Date().timeIntervalSince1970)
     let tiles = Treemap.layout(index, root: root, in: Rect(x: 0, y: 0, w: Double(width), h: Double(H)),
                                minSide: 1, cushionHeight: 0.42)
+    // Spotlight: when a folder is selected on the left, keep its tiles at full color and dim
+    // everything outside its subtree, so the selection's region pops out of the treemap.
+    let dim = 0.34
     let px = Treemap.renderCushionRGBA(tiles: tiles, width: width, height: H, ambient: palette.ambient) { tile in
         var c = recency.apply(palette.srgb(forExt: cliExt(index.nodes[tile.node].name)),
                               modTime: index.nodes[tile.node].modTime, now: now)
         c = depth.apply(c, depth: tile.depth)
+        if let h = highlight, !nodeInSubtree(index, tile.node, sub: h, root: root) {
+            c = (r: c.r * dim, g: c.g * dim, b: c.b * dim)
+        }
         return c
     }
     var lines: [String] = []
@@ -480,9 +499,10 @@ final class TUI {
                    "   \(tuiHuman(total)) · \(index.fileCount) files"
         out += "\u{1b}[7m" + pad(head, cols) + "\u{1b}[0m\u{1b}[K\r\n"
 
-        // Right pane: cushion treemap of the focused folder.
+        // Right pane: cushion treemap of the focused folder, with the selected child spotlit.
         let mapRows = bodyRows
-        let map = cushionRows(index, root: cur, width: max(1, rightW), rows: mapRows, palette: palette, recency: recency, depth: depth)
+        let highlight = kids.indices.contains(sel) ? kids[sel] : nil
+        let map = cushionRows(index, root: cur, width: max(1, rightW), rows: mapRows, palette: palette, recency: recency, depth: depth, highlight: highlight)
 
         // Left pane: scrollable child list. Keep the selection in view.
         if sel < top { top = sel }
