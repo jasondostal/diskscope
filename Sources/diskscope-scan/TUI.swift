@@ -127,19 +127,6 @@ private func tuiDate(_ epoch: Int64) -> String {
     return tuiDateFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(epoch)))
 }
 
-/// Is `node` inside the subtree rooted at `sub` (inclusive)? Walks parent links upward,
-/// bounded by the treemap `root` so it stays O(depth) — depth here is tiny.
-private func nodeInSubtree(_ index: FileIndex, _ node: Int, sub: Int, root: Int) -> Bool {
-    var n = node
-    while true {
-        if n == sub { return true }
-        if n == root { return false }
-        let p = index.nodes[n].parent
-        if p < 0 { return false }
-        n = Int(p)
-    }
-}
-
 /// The treemap of `root` as half-block text rows (two vertical pixels per character cell).
 /// Shared shape with --term; here it's composed into the right pane of the split view.
 private func cushionRows(_ index: FileIndex, root: Int, width: Int, rows: Int,
@@ -150,17 +137,31 @@ private func cushionRows(_ index: FileIndex, root: Int, width: Int, rows: Int,
     let now = Int64(Date().timeIntervalSince1970)
     let tiles = Treemap.layout(index, root: root, in: Rect(x: 0, y: 0, w: Double(width), h: Double(H)),
                                minSide: 1, cushionHeight: 0.42)
-    // Spotlight: when a folder is selected on the left, keep its tiles at full color and dim
-    // everything outside its subtree, so the selection's region pops out of the treemap.
-    let dim = 0.34
-    let px = Treemap.renderCushionRGBA(tiles: tiles, width: width, height: H, ambient: palette.ambient) { tile in
+    var px = Treemap.renderCushionRGBA(tiles: tiles, width: width, height: H, ambient: palette.ambient) { tile in
         var c = recency.apply(palette.srgb(forExt: cliExt(index.nodes[tile.node].name)),
                               modTime: index.nodes[tile.node].modTime, now: now)
         c = depth.apply(c, depth: tile.depth)
-        if let h = highlight, !nodeInSubtree(index, tile.node, sub: h, root: root) {
-            c = (r: c.r * dim, g: c.g * dim, b: c.b * dim)
-        }
         return c
+    }
+
+    // Selection: trace a white border around the selected folder's region, like the GUI. The
+    // layout emits a tile for the folder node itself, whose rect is the exact bounding box of
+    // its whole subtree — so we just stroke that rectangle's perimeter in the pixel buffer.
+    if let h = highlight, let tile = tiles.first(where: { $0.node == h }) {
+        func setWhite(_ x: Int, _ y: Int) {
+            guard x >= 0, x < width, y >= 0, y < H else { return }
+            let i = (y * width + x) * 4
+            px[i] = 255; px[i + 1] = 255; px[i + 2] = 255
+        }
+        let r = tile.rect
+        let x0 = max(0, Int(r.x.rounded(.down)))
+        let y0 = max(0, Int(r.y.rounded(.down)))
+        let x1 = min(width - 1, Int((r.x + r.w).rounded(.up)) - 1)
+        let y1 = min(H - 1, Int((r.y + r.h).rounded(.up)) - 1)
+        if x1 >= x0, y1 >= y0 {
+            for x in x0...x1 { setWhite(x, y0); setWhite(x, y1) }
+            for y in y0...y1 { setWhite(x0, y); setWhite(x1, y) }
+        }
     }
     var lines: [String] = []
     var y = 0
