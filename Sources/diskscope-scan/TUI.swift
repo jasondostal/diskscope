@@ -137,43 +137,51 @@ private func cushionRows(_ index: FileIndex, root: Int, width: Int, rows: Int,
     let now = Int64(Date().timeIntervalSince1970)
     let tiles = Treemap.layout(index, root: root, in: Rect(x: 0, y: 0, w: Double(width), h: Double(H)),
                                minSide: 1, cushionHeight: 0.42)
-    var px = Treemap.renderCushionRGBA(tiles: tiles, width: width, height: H, ambient: palette.ambient) { tile in
+    let px = Treemap.renderCushionRGBA(tiles: tiles, width: width, height: H, ambient: palette.ambient) { tile in
         var c = recency.apply(palette.srgb(forExt: cliExt(index.nodes[tile.node].name)),
                               modTime: index.nodes[tile.node].modTime, now: now)
         c = depth.apply(c, depth: tile.depth)
         return c
     }
 
-    // Selection: trace a white border around the selected folder's region, like the GUI. The
-    // layout emits a tile for the folder node itself, whose rect is the exact bounding box of
-    // its whole subtree — so we just stroke that rectangle's perimeter in the pixel buffer.
+    // Selection: outline the selected folder's region, like the GUI. The layout emits a tile for
+    // the folder node itself whose rect is the exact bounding box of its subtree. We stroke that
+    // rectangle with thin box-drawing glyphs at CELL resolution (a solid pixel column would be a
+    // whole terminal cell wide and read chunky); the glyph is a thin line, so the frame is crisp.
+    // Border bounds in cell coords: x is 1 cell per pixel column; each cell row spans 2 px rows.
+    var bx0 = -1, by0 = -1, bx1 = -1, by1 = -1
     if let h = highlight, let tile = tiles.first(where: { $0.node == h }) {
-        func setWhite(_ x: Int, _ y: Int) {
-            guard x >= 0, x < width, y >= 0, y < H else { return }
-            let i = (y * width + x) * 4
-            px[i] = 255; px[i + 1] = 255; px[i + 2] = 255
-        }
         let r = tile.rect
-        let x0 = max(0, Int(r.x.rounded(.down)))
-        let y0 = max(0, Int(r.y.rounded(.down)))
-        let x1 = min(width - 1, Int((r.x + r.w).rounded(.up)) - 1)
-        let y1 = min(H - 1, Int((r.y + r.h).rounded(.up)) - 1)
-        if x1 >= x0, y1 >= y0 {
-            for x in x0...x1 { setWhite(x, y0); setWhite(x, y1) }
-            for y in y0...y1 { setWhite(x0, y); setWhite(x1, y) }
-        }
+        bx0 = max(0, Int(r.x.rounded(.down)))
+        bx1 = min(width - 1, Int((r.x + r.w).rounded(.up)) - 1)
+        by0 = max(0, Int(r.y.rounded(.down)) / 2)
+        by1 = min((H / 2) - 1, (Int((r.y + r.h).rounded(.up)) - 1) / 2)
     }
+
     var lines: [String] = []
-    var y = 0
+    var y = 0, cellRow = 0
     while y + 1 < H {
         var s = ""
         for x in 0..<width {
             let t = (y * width + x) * 4, b = ((y + 1) * width + x) * 4
-            s += "\u{1b}[38;2;\(px[t]);\(px[t+1]);\(px[t+2])m\u{1b}[48;2;\(px[b]);\(px[b+1]);\(px[b+2])m▀"
+            let onTopBot = (cellRow == by0 || cellRow == by1) && x >= bx0 && x <= bx1
+            let onSides  = (x == bx0 || x == bx1) && cellRow >= by0 && cellRow <= by1
+            if bx0 >= 0, onTopBot || onSides {
+                // White line glyph over the cell's color, so the border sits on top of content.
+                let top = cellRow == by0, bot = cellRow == by1, lft = x == bx0, rgt = x == bx1
+                let g: String
+                if      top && lft { g = "┌" } else if top && rgt { g = "┐" }
+                else if bot && lft { g = "└" } else if bot && rgt { g = "┘" }
+                else if top || bot { g = "─" } else { g = "│" }
+                s += "\u{1b}[38;2;255;255;255m\u{1b}[48;2;\(px[b]);\(px[b+1]);\(px[b+2])m\(g)"
+            } else {
+                s += "\u{1b}[38;2;\(px[t]);\(px[t+1]);\(px[t+2])m\u{1b}[48;2;\(px[b]);\(px[b+1]);\(px[b+2])m▀"
+            }
         }
         s += "\u{1b}[0m"
         lines.append(s)
         y += 2
+        cellRow += 1
     }
     return lines
 }
