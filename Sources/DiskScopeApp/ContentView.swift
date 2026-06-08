@@ -202,7 +202,19 @@ struct TreeListView: View {
             ScrollViewReader { proxy in
                 List(selection: $selected) {
                     Section {
-                        NodeRows(node: root, model: model, expanded: $expanded, depth: 0)
+                        // Flatten the expanded nodes into a single ForEach. A self-recursive row
+                        // view (NodeRows-calls-NodeRows) is NOT reliably flattened by List past a
+                        // couple of levels — it capped expansion at one level deep. Recursing in
+                        // plain Swift and feeding List one flat list has no such limit.
+                        ForEach(flattenedRows(root)) { row in
+                            TreeRow(node: row.node, total: model.totalSize, depth: row.depth,
+                                    isExpanded: expanded.contains(row.node.id), palette: model.palette) {
+                                toggle(row.node.id)
+                            }
+                            .tag(row.node.id)
+                            .id(row.node.id)
+                            .contextMenu { fileMenu(model, row.node.id) }
+                        }
                     } header: {
                         treeHeader
                     }
@@ -241,27 +253,27 @@ struct TreeListView: View {
     }
 }
 
-/// Recursive outline row with explicit expansion control (so the treemap can reveal a path).
-struct NodeRows: View {
-    let node: TreeNode
-    @ObservedObject var model: TreemapModel
-    @Binding var expanded: Set<Int>
-    let depth: Int
+extension TreeListView {
+    /// One visible row: a node plus its indentation depth. Identified by the node id so List
+    /// selection, `.tag`, and scroll-to-reveal all keep working.
+    struct Row: Identifiable { let node: TreeNode; let depth: Int; var id: Int { node.id } }
 
-    var body: some View {
-        TreeRow(node: node, total: model.totalSize, depth: depth,
-                isExpanded: expanded.contains(node.id), palette: model.palette) {
-            if expanded.contains(node.id) { expanded.remove(node.id) } else { expanded.insert(node.id) }
-        }
-        .tag(node.id)
-        .id(node.id)
-        .contextMenu { fileMenu(model, node.id) }
-
-        if node.isDir, expanded.contains(node.id), let kids = node.children {
-            ForEach(kids) { child in
-                NodeRows(node: child, model: model, expanded: $expanded, depth: depth + 1)
+    /// Depth-first walk of the expanded nodes, in display order. Children are still materialized
+    /// lazily (only expanded branches touch `.children`), so a big tree stays cheap.
+    func flattenedRows(_ root: TreeNode) -> [Row] {
+        var rows: [Row] = []
+        func walk(_ node: TreeNode, _ depth: Int) {
+            rows.append(Row(node: node, depth: depth))
+            if node.isDir, expanded.contains(node.id), let kids = node.children {
+                for k in kids { walk(k, depth + 1) }
             }
         }
+        walk(root, 0)
+        return rows
+    }
+
+    func toggle(_ id: Int) {
+        if expanded.contains(id) { expanded.remove(id) } else { expanded.insert(id) }
     }
 }
 
