@@ -145,11 +145,14 @@ struct ContentView: View {
             if model.state == .ready {
                 Text("\(humanSize(model.totalSize)) · \(model.fileCount.formatted()) files · \(String(format: "%.1fs", model.scanSeconds))")
                     .font(.callout).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).fixedSize()
-                // File actions grouped together — no theme control wedged between them.
-                HStack(spacing: 8) {
-                    Button { model.scan(model.path) } label: { Label("Refresh", systemImage: "arrow.clockwise") }
-                    Button("Choose…") { chooseFolder() }
+                // File actions as clean borderless icons (matching the theme menu), tooltips for clarity.
+                HStack(spacing: 12) {
+                    Button { model.scan(model.path) } label: { Image(systemName: "arrow.clockwise") }
+                        .help("Rescan this folder")
+                    Button { chooseFolder() } label: { Image(systemName: "folder.badge.plus") }
+                        .help("Scan a different folder…")
                 }
+                .buttonStyle(.borderless).imageScale(.large)
                 Divider().frame(height: 16)
                 themeMenu
             }
@@ -325,11 +328,12 @@ func iconForExt(_ e: String) -> String {
 
 struct PercentBar: View {
     let fraction: Double
+    var color: Color = Color(red: 0.34, green: 0.62, blue: 0.92)
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.white.opacity(0.08))
-                Capsule().fill(Color(red: 0.34, green: 0.62, blue: 0.92))
+                Capsule().fill(color)
                     .frame(width: max(2, geo.size.width * min(1, max(0, fraction))))
             }
         }
@@ -361,13 +365,14 @@ struct DetailsView: View {
 
                 Divider().overlay(Color.white.opacity(0.06)).padding(.vertical, 1)
 
-                // Two-column stat grid keeps the panel short so the legend below it breathes.
-                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 16, verticalSpacing: 5) {
-                    GridRow { cell("Size", humanSize(s.size)); cell("Disk", pct(s.fractionOfTotal)) }
+                // Two columns that fill the panel width — label left, value right within each half —
+                // so the stats use the space instead of clustering on the left.
+                VStack(spacing: 6) {
+                    statPair("Size", humanSize(s.size), "Disk", pct(s.fractionOfTotal))
                     if s.isDir {
-                        GridRow { cell("Files", s.subtreeFiles.formatted()); cell("Items", s.subtreeItems.formatted()) }
+                        statPair("Files", s.subtreeFiles.formatted(), "Items", s.subtreeItems.formatted())
                     }
-                    GridRow { cell("Modified", shortDate(s.modTime)); cell("Created", shortDate(s.createTime)) }
+                    statPair("Modified", shortDate(s.modTime), "Created", shortDate(s.createTime))
                 }
                 if !s.isRoot { shareOfParent(s) }
 
@@ -400,7 +405,15 @@ struct DetailsView: View {
     private func cell(_ label: String, _ value: String) -> some View {
         HStack(spacing: 5) {
             Text(label).font(.caption2).foregroundStyle(.secondary)
+            Spacer(minLength: 4)
             Text(value).font(.caption).monospacedDigit()
+        }
+    }
+    /// Two stat cells side by side, each filling half the row (value right-aligned in its half).
+    private func statPair(_ l1: String, _ v1: String, _ l2: String, _ v2: String) -> some View {
+        HStack(spacing: 18) {
+            cell(l1, v1)
+            cell(l2, v2)
         }
     }
     private func shareOfParent(_ s: NodeStats) -> some View {
@@ -422,22 +435,26 @@ struct LegendView: View {
             Section {
                 ForEach(model.legend) { e in
                     let isHL = model.highlightExt == e.ext && !e.ext.hasPrefix("·")
-                    HStack(spacing: 7) {
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(model.palette.color(FilePalette.category(forExt: e.ext.hasPrefix("·") ? "" : e.ext)))
-                            .frame(width: 11, height: 11)
+                    let catColor = model.palette.color(FilePalette.category(forExt: e.ext.hasPrefix("·") ? "" : e.ext))
+                    HStack(spacing: 8) {
+                        RoundedRectangle(cornerRadius: 2).fill(catColor).frame(width: 11, height: 11)
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(e.displayExt).font(.callout).monospacedDigit()
+                            Text(e.displayExt).font(.callout).monospacedDigit().lineLimit(1)
                             Text(e.ext.hasPrefix("·") ? "\(e.count.formatted()) files" : FilePalette.description(forExt: e.ext))
                                 .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
                         }
-                        Spacer(minLength: 4)
+                        .frame(width: 112, alignment: .leading)
+                        // Type-colored proportion bar fills the middle (WinDirStat-style) — uses the
+                        // space and gives an at-a-glance sense of each type's share.
+                        PercentBar(fraction: e.fraction, color: catColor)
+                            .frame(height: 6).frame(maxWidth: .infinity).layoutPriority(1)
                         if isHL { Image(systemName: "eye.fill").font(.caption2).foregroundStyle(.tint) }
                         VStack(alignment: .trailing, spacing: 1) {
                             Text(humanSize(e.bytes)).font(.caption).monospacedDigit()
                             Text(String(format: "%.1f%%", e.fraction * 100))
                                 .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
                         }
+                        .frame(width: 70, alignment: .trailing)
                     }
                     .padding(.vertical, 1)
                     .contentShape(Rectangle())
