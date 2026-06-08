@@ -53,18 +53,46 @@ func writePNG(_ rgba: [UInt8], width: Int, height: Int, to path: String) {
     CGImageDestinationFinalize(dest)
 }
 
-// diskscope-scan <path> [workers]      — scan a path, report count + wall-clock
-// diskscope-scan --tui <path>          — interactive terminal UI (tree + live treemap)
+// diskscope-scan [path] [theme]        — interactive terminal UI (the DEFAULT; cwd if omitted)
+// diskscope-scan --tui [path] [theme]  — same, explicit
+// diskscope-scan --bench [path] [wrk]  — one-shot scan summary (counts, size, wall-clock)
 // diskscope-scan --watch <path>        — build index, watch live, print reconcile deltas
-//   workers omitted or 1 -> serial scanner; >1 -> parallel worker pool.
 
-// diskscope-scan --tui <path> [theme]  — interactive terminal UI (needs a truecolor terminal).
-// Optional third arg picks a theme by id (e.g. "halloween", "winter") from the shared library.
-if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--tui" {
-    let themeID = CommandLine.arguments.count > 3
-        ? CommandLine.arguments[3]
-        : ProcessInfo.processInfo.environment["DISKSCOPE_THEME"]
-    runTUI(path: CommandLine.arguments[2], theme: themeID)
+/// One-shot scan: report entry counts, allocated size, and wall-clock. The pre-1.0.3 default;
+/// now reached via `--bench` (or automatically when stdout isn't a terminal). Never returns.
+func runScanSummary(path: String, workers: Int) -> Never {
+    let mode = workers > 1 ? "parallel x\(workers)" : "serial"
+    FileHandle.standardError.write("scanning \(path) [\(mode)] ...\n".data(using: .utf8)!)
+    let start = DispatchTime.now()
+    let stats = workers > 1
+        ? DiskScopeParallelScanner.scan(path: path, workers: workers)
+        : DiskScopeScanner.scan(path: path)
+    let seconds = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000_000
+    let total = stats.files + stats.dirs
+    let rate = seconds > 0 ? Double(total) / seconds : 0
+    let gib = Double(stats.allocBytes) / (1024 * 1024 * 1024)
+    func fmt(_ n: Int) -> String {
+        let f = NumberFormatter(); f.numberStyle = .decimal
+        return f.string(from: NSNumber(value: n)) ?? "\(n)"
+    }
+    print("""
+    \u{2500}\u{2500} diskscope scan \u{2500}\u{2500}
+    entries   \(fmt(total))  (\(fmt(stats.files)) files, \(fmt(stats.dirs)) dirs)
+    size      \(String(format: "%.2f", gib)) GiB allocated
+    errors    \(fmt(stats.errors))  (unreadable dirs: SIP / no Full Disk Access)
+    time      \(String(format: "%.3f", seconds)) s
+    rate      \(fmt(Int(rate))) entries/sec
+    """)
+    exit(0)
+}
+
+// diskscope-scan --tui [path] [theme]  — interactive terminal UI (needs a truecolor terminal).
+// Path defaults to the current directory; optional theme id (e.g. "halloween") from the library.
+if CommandLine.arguments.count >= 2, CommandLine.arguments[1] == "--tui" {
+    let rest = Array(CommandLine.arguments.dropFirst(2))   // [path] [theme]
+    let path = rest.first ?? FileManager.default.currentDirectoryPath
+    let themeID = rest.count > 1 ? rest[1] : ProcessInfo.processInfo.environment["DISKSCOPE_THEME"]
+    runTUI(path: path, theme: themeID)
 }
 
 if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--watch" {
@@ -226,34 +254,27 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--index" {
     exit(0)
 }
 
-let path = CommandLine.arguments.count > 1
-    ? CommandLine.arguments[1]
-    : FileManager.default.homeDirectoryForCurrentUser.path
-let workers = CommandLine.arguments.count > 2 ? (Int(CommandLine.arguments[2]) ?? 1) : 1
-
-let mode = workers > 1 ? "parallel x\(workers)" : "serial"
-FileHandle.standardError.write("scanning \(path) [\(mode)] ...\n".data(using: .utf8)!)
-
-let start = DispatchTime.now()
-let stats = workers > 1
-    ? DiskScopeParallelScanner.scan(path: path, workers: workers)
-    : DiskScopeScanner.scan(path: path)
-let seconds = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000_000
-
-let total = stats.files + stats.dirs
-let rate = seconds > 0 ? Double(total) / seconds : 0
-let gib = Double(stats.allocBytes) / (1024 * 1024 * 1024)
-
-func fmt(_ n: Int) -> String {
-    let f = NumberFormatter(); f.numberStyle = .decimal
-    return f.string(from: NSNumber(value: n)) ?? "\(n)"
+// diskscope-scan --bench [path] [workers]  — explicit one-shot scan summary (cwd if omitted).
+if CommandLine.arguments.count >= 2, CommandLine.arguments[1] == "--bench" {
+    let target = CommandLine.arguments.count > 2
+        ? CommandLine.arguments[2]
+        : FileManager.default.currentDirectoryPath
+    let workers = CommandLine.arguments.count > 3 ? (Int(CommandLine.arguments[3]) ?? 1) : 1
+    runScanSummary(path: target, workers: workers)
 }
 
-print("""
-\u{2500}\u{2500} diskscope scan \u{2500}\u{2500}
-entries   \(fmt(total))  (\(fmt(stats.files)) files, \(fmt(stats.dirs)) dirs)
-size      \(String(format: "%.2f", gib)) GiB allocated
-errors    \(fmt(stats.errors))  (unreadable dirs: SIP / no Full Disk Access)
-time      \(String(format: "%.3f", seconds)) s
-rate      \(fmt(Int(rate))) entries/sec
-""")
+// ── Default (no recognized flag): launch the interactive TUI on the given path, or the
+//    current directory if none is given. When stdout is NOT a terminal (piped, redirected,
+//    non-interactive), fall back to the one-shot scan summary so the tool stays scriptable.
+let path = CommandLine.arguments.count > 1
+    ? CommandLine.arguments[1]
+    : FileManager.default.currentDirectoryPath
+let themeID = CommandLine.arguments.count > 2
+    ? CommandLine.arguments[2]
+    : ProcessInfo.processInfo.environment["DISKSCOPE_THEME"]
+
+if isatty(fileno(stdout)) != 0 {
+    runTUI(path: path, theme: themeID)
+} else {
+    runScanSummary(path: path, workers: 1)
+}

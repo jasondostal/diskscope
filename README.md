@@ -45,18 +45,23 @@ the whole disk.
 
 ## Terminal UI
 
-`diskscope --tui <path>` is a fully interactive treemap in your terminal — same scan, same
-cushions, drilling around with the keyboard. Needs a **truecolor** terminal (iTerm2, Ghostty,
+Just run `diskscope` — with no arguments it opens a fully interactive treemap of the current
+directory right in your terminal — same scan, same cushions, drilling around with the keyboard.
+Pass a path to scope it there. Needs a **truecolor** terminal (iTerm2, Ghostty,
 kitty, WezTerm).
 
 ![DiskScope TUI](tui.png)
 
 ```sh
-diskscope --tui ~          # interactive terminal UI
+diskscope                  # interactive terminal UI of the current directory
+diskscope <path>           # …of <path> instead
 diskscope --treemap <path> # render a treemap SVG
 diskscope --term <path>    # static cushioned treemap, printed once
-diskscope <path> [workers] # scan benchmark
+diskscope --bench <path>   # one-shot scan summary (counts, size, wall-clock)
 ```
+
+Piped or redirected (a non-interactive stdout), bare `diskscope` prints the `--bench` summary
+instead of the TUI, so it stays scriptable.
 
 (Installed via Homebrew the CLI is on your PATH as `diskscope`; from source the product is
 `diskscope-scan`.)
