@@ -93,7 +93,15 @@ public enum DiskScopeScanner {
         let fd = open(path, O_RDONLY | O_DIRECTORY)
         if fd < 0 { return nil }
         defer { close(fd) }
+        let buf = UnsafeMutableRawPointer.allocate(byteCount: bufferSize, alignment: 8)
+        defer { buf.deallocate() }
+        return scanLevel(fd: fd, buf: buf, bufSize: bufferSize)
+    }
 
+    /// Same, over an already-open directory fd with a caller-provided buffer — lets the
+    /// parallel builder reuse one buffer per worker (instead of a 256 KiB malloc/free per
+    /// directory) and descend via openat without re-resolving full paths.
+    public static func scanLevel(fd: Int32, buf: UnsafeMutableRawPointer, bufSize: Int) -> DirLevel? {
         var st = stat()
         let ok = fstat(fd, &st) == 0
         let dev = ok ? UInt64(bitPattern: Int64(st.st_dev)) : 0
@@ -115,13 +123,15 @@ public enum DiskScopeScanner {
         attrList.commonattr = bitReturned | bitName | bitObjType | bitCrTime | bitModTime
         attrList.fileattr = bitAlloc
 
-        let buf = UnsafeMutableRawPointer.allocate(byteCount: bufferSize, alignment: 8)
-        defer { buf.deallocate() }
-
         var entries: [Entry] = []
         while true {
-            let count = getattrlistbulk(fd, &attrList, buf, bufferSize, 0)
-            if count <= 0 { break }
+            let count = getattrlistbulk(fd, &attrList, buf, bufSize, 0)
+            if count <= 0 {
+                // APFS quirk: when the previous call EXACTLY filled the buffer, the next
+                // call fails with ERANGE instead of returning 0 — enumeration is complete,
+                // not broken. Any other failure also ends the level (entries so far stand).
+                break
+            }
             var entry = buf
             for _ in 0..<count {
                 let len = entry.loadUnaligned(fromByteOffset: 0, as: UInt32.self)
@@ -199,7 +209,9 @@ public enum DiskScopeScanner {
         while true {
             let count = getattrlistbulk(fd, &attrList, buf, bufferSize, 0)
             if count <= 0 {
-                if count < 0 { sink.unreadable() }
+                // ERANGE after an exact buffer fill means the level is complete (APFS
+                // quirk), not an error — only other failures count as unreadable.
+                if count < 0 && errno != ERANGE { sink.unreadable() }
                 break
             }
 

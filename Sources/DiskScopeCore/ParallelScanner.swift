@@ -90,7 +90,8 @@ public final class DiskScopeParallelScanner {
         while true {
             let count = getattrlistbulk(fd, &attrList, buf, Self.bufferSize, 0)
             if count <= 0 {
-                if count < 0 { stats.errors += 1 }
+                // ERANGE after an exact fill = complete, not an error (APFS quirk).
+                if count < 0 && errno != ERANGE { stats.errors += 1 }
                 break
             }
             var entry = buf

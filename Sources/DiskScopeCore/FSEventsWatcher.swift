@@ -23,9 +23,25 @@ public final class FSEventsWatcher {
     private let handler: Handler
     private let queue = DispatchQueue(label: "com.diskscope.fsevents")
     private var stream: FSEventStreamRef?
+    private let sinceEventId: UInt64?
 
-    public init(roots: [String], handler: @escaping Handler) {
+    /// Fired once after a historical replay (`sinceEventId`) has fully drained — the
+    /// kFSEventStreamEventFlagHistoryDone marker. Runs on the watcher's queue.
+    public var onHistoryDone: (() -> Void)?
+    /// Fired when the journal can't serve us reliably: event IDs wrapped, or the kernel
+    /// asks for a recursive rescan at (or above) a watched root. Caller should full-rescan.
+    public var onInvalidated: (() -> Void)?
+
+    /// The volume-global FSEvents ID for "now" — capture this BEFORE a scan starts and
+    /// save it with the index; replaying from it on next launch can only over-deliver
+    /// (reconcile is idempotent), never miss.
+    public static func currentEventId() -> UInt64 {
+        FSEventsGetCurrentEventId()
+    }
+
+    public init(roots: [String], sinceEventId: UInt64? = nil, handler: @escaping Handler) {
         self.roots = roots
+        self.sinceEventId = sinceEventId
         self.handler = handler
     }
 
@@ -51,14 +67,30 @@ public final class FSEventsWatcher {
 
             var dirs = Set<String>()
             var deep = Set<String>()
+            var historyDone = false
+            var invalidated = false
             for i in 0..<count {
                 let path = paths[i]
                 let flag = Int(rawFlags[i])
+
+                if flag & kFSEventStreamEventFlagHistoryDone != 0 {
+                    historyDone = true       // marker pseudo-event, no path to reconcile
+                    continue
+                }
+                if flag & kFSEventStreamEventFlagEventIdsWrapped != 0 {
+                    invalidated = true        // journal IDs wrapped — replay is unreliable
+                    continue
+                }
                 let isDir = flag & kFSEventStreamEventFlagItemIsDir != 0
 
                 if flag & kFSEventStreamEventFlagMustScanSubDirs != 0 {
-                    // Coalesced: re-scan this whole subtree.
-                    dirs.insert(path); deep.insert(path)
+                    // Coalesced: re-scan this whole subtree. At/above a root, the whole
+                    // index is suspect — tell the caller to start over.
+                    if watcher.roots.contains(where: { $0 == path || $0.hasPrefix(path == "/" ? "/" : path + "/") }) {
+                        invalidated = true
+                    } else {
+                        dirs.insert(path); deep.insert(path)
+                    }
                     continue
                 }
                 // Reconcile the containing directory (catches create/delete/rename of
@@ -67,12 +99,14 @@ public final class FSEventsWatcher {
                 if isDir { dirs.insert(path) }
             }
             if !dirs.isEmpty { watcher.handler(Array(dirs), deep) }
+            if invalidated { watcher.onInvalidated?() }
+            if historyDone { watcher.onHistoryDone?() }
         }
 
         guard let stream = FSEventStreamCreate(
             kCFAllocatorDefault, callback, &ctx,
             roots as CFArray,
-            FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
+            sinceEventId ?? FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
             0.10,                       // latency: coalesce bursts into ~100ms batches
             flags)
         else { return false }

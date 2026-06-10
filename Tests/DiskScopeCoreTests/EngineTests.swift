@@ -101,7 +101,10 @@ final class EngineTests: XCTestCase {
         let index = builtIndex()
         let n = index.fileCount
         try Data(count: 300).write(to: root.appendingPathComponent("new.txt"))
-        XCTAssertEqual(index.reconcile(directoryPath: root.path), ReconcileDelta(added: 1))
+        let d = index.reconcile(directoryPath: root.path)
+        XCTAssertEqual(d.added, 1); XCTAssertEqual(d.removed, 0); XCTAssertEqual(d.updated, 0)
+        XCTAssertGreaterThanOrEqual(d.bytes, 300, "delta carries the new bytes")
+        XCTAssertGreaterThanOrEqual(d.extBytes["txt"] ?? 0, 300, "per-ext delta for legends")
         XCTAssertEqual(index.search("new.txt").count, 1)
         XCTAssertEqual(index.fileCount, n + 1)
     }
@@ -109,7 +112,9 @@ final class EngineTests: XCTestCase {
     func testReconcileDelete() throws {
         let index = builtIndex()
         try fm.removeItem(at: root.appendingPathComponent("a.txt"))
-        XCTAssertEqual(index.reconcile(directoryPath: root.path), ReconcileDelta(removed: 1))
+        let d = index.reconcile(directoryPath: root.path)
+        XCTAssertEqual(d.added, 0); XCTAssertEqual(d.removed, 1); XCTAssertEqual(d.updated, 0)
+        XCTAssertLessThan(d.bytes, 0, "removed bytes are negative")
         XCTAssertTrue(index.search("a.txt").isEmpty)
     }
 
@@ -140,6 +145,79 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(index.reconcile(directoryPath: root.path).removed, 1)
         XCTAssertTrue(index.search("b.txt").isEmpty && index.search("c.txt").isEmpty)
         XCTAssertEqual(index.reconcile(directoryPath: root.path), ReconcileDelta(), "no-op when unchanged")
+    }
+
+    // MARK: - Incremental aggregate (reconcile patches ancestors in O(depth))
+
+    /// After arbitrary reconciles WITHOUT a full aggregate(), the totals must already be
+    /// what a full aggregate would compute — that's the contract that lets live refresh
+    /// drop the O(n) pass.
+    func testIncrementalAggregateMatchesFull() throws {
+        let index = builtIndex()
+        // Mutate: grow a file, delete one, add one, graft a subtree, then reconcile.
+        try Data(count: 5000).write(to: root.appendingPathComponent("sub/b.txt"))
+        try fm.removeItem(at: root.appendingPathComponent("a.txt"))
+        try Data(count: 700).write(to: root.appendingPathComponent("added.bin"))
+        let newDir = root.appendingPathComponent("sub/deep/newdir")
+        try fm.createDirectory(at: newDir, withIntermediateDirectories: true)
+        try Data(count: 1234).write(to: newDir.appendingPathComponent("inner.dat"))
+
+        index.reconcile(directoryPath: root.path)
+        index.reconcile(directoryPath: root.appendingPathComponent("sub").path)
+        index.reconcile(directoryPath: root.appendingPathComponent("sub/deep").path)
+
+        let liveTotals = index.nodes.indices.filter { !index.nodes[$0].deleted }
+            .map { (index.nodes[$0].totalSize, index.nodes[$0].subtreeFiles, index.nodes[$0].subtreeItems) }
+        index.aggregate()
+        let fullTotals = index.nodes.indices.filter { !index.nodes[$0].deleted }
+            .map { (index.nodes[$0].totalSize, index.nodes[$0].subtreeFiles, index.nodes[$0].subtreeItems) }
+        for (i, (live, full)) in zip(liveTotals, fullTotals).enumerated() {
+            XCTAssertEqual(live.0, full.0, "totalSize matches full aggregate at #\(i)")
+            XCTAssertEqual(live.1, full.1, "subtreeFiles matches at #\(i)")
+            XCTAssertEqual(live.2, full.2, "subtreeItems matches at #\(i)")
+        }
+    }
+
+    func testReconcileSubtreeRegrafts() throws {
+        let index = builtIndex()
+        try Data(count: 4096).write(to: root.appendingPathComponent("sub/deep/d2.txt"))
+        index.reconcileSubtree(directoryPath: root.appendingPathComponent("sub").path)
+        XCTAssertEqual(index.search("d2.txt").count, 1)
+        XCTAssertEqual(index.search("c.txt").count, 1, "old content re-grafted, not lost")
+        // Totals patched incrementally must equal a full recompute.
+        let live = index.nodes[0].totalSize
+        index.aggregate()
+        XCTAssertEqual(live, index.nodes[0].totalSize)
+    }
+
+    // MARK: - IndexStore (persistent snapshot round-trip)
+
+    func testIndexStoreRoundTrip() throws {
+        let index = builtIndex()
+        try IndexStore.save(index, root: root.path, eventID: 42)
+        defer { try? fm.removeItem(at: IndexStore.url(forRoot: root.path)) }
+
+        let loaded = IndexStore.load(root: root.path)
+        XCTAssertNotNil(loaded)
+        let (restored, eventID) = loaded!
+        XCTAssertEqual(eventID, 42)
+        restored.aggregate()
+        XCTAssertEqual(restored.fileCount, index.fileCount)
+        XCTAssertEqual(restored.dirCount, index.dirCount)
+        XCTAssertEqual(restored.nodes[0].totalSize, index.nodes[0].totalSize)
+        XCTAssertEqual(Set(restored.search("txt").map(\.path)), Set(index.search("txt").map(\.path)))
+
+        // The restored index must still reconcile (path maps rebuilt correctly).
+        try Data(count: 300).write(to: root.appendingPathComponent("afterload.txt"))
+        XCTAssertEqual(restored.reconcile(directoryPath: root.path).added, 1)
+        XCTAssertEqual(restored.search("afterload.txt").count, 1)
+    }
+
+    func testIndexStoreRejectsWrongRoot() throws {
+        let index = builtIndex()
+        try IndexStore.save(index, root: root.path, eventID: 1)
+        defer { try? fm.removeItem(at: IndexStore.url(forRoot: root.path)) }
+        XCTAssertNil(IndexStore.load(root: "/somewhere/else"), "wrong root → no snapshot")
     }
 
     // MARK: - Timestamps (mtime/crtime threaded from getattrlistbulk)

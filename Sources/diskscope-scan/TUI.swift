@@ -138,6 +138,7 @@ private func cushionRows(_ index: FileIndex, root: Int, width: Int, rows: Int,
     let tiles = Treemap.layout(index, root: root, in: Rect(x: 0, y: 0, w: Double(width), h: Double(H)),
                                minSide: 1, cushionHeight: 0.42)
     let px = Treemap.renderCushionRGBA(tiles: tiles, width: width, height: H, ambient: palette.ambient) { tile in
+        if tile.isDir { return palette.dirFill } // backdrop under too-small-to-draw files
         var c = recency.apply(palette.srgb(forExt: cliExt(index.nodes[tile.node].name)),
                               modTime: index.nodes[tile.node].modTime, now: now)
         c = depth.apply(c, depth: tile.depth)

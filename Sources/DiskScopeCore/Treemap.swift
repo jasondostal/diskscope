@@ -24,6 +24,10 @@ public struct TreemapTile: Sendable {
     public let depth: Int
     public let isDir: Bool
     public var cushion = Cushion()
+    /// Directory tiles whose children were (partly or fully) too small to emit must paint
+    /// as a backdrop cushion themselves — otherwise their region renders as a background
+    /// hole (the classic "folder of 100k tiny files shows as a black void").
+    public var renderBackdrop = false
 }
 
 /// Squarified treemap layout (Bruls, Huizing & van Wijk 2000): subdivide a rectangle
@@ -57,10 +61,14 @@ public enum Treemap {
         var c = coeffs
         addRidge(rect.x, rect.x + rect.w, h, &c.s1x, &c.s2x)
         addRidge(rect.y, rect.y + rect.h, h, &c.s1y, &c.s2y)
-        tiles.append(TreemapTile(node: node, rect: rect, depth: depth,
-                                 isDir: index.nodes[node].isDir, cushion: c))
-        guard depth < maxDepth, index.nodes[node].isDir,
-              rect.w >= minSide, rect.h >= minSide else { return }
+        let myTile = tiles.count
+        let isDir = index.nodes[node].isDir
+        tiles.append(TreemapTile(node: node, rect: rect, depth: depth, isDir: isDir, cushion: c))
+        guard depth < maxDepth, isDir, rect.w >= minSide, rect.h >= minSide else {
+            // A directory we won't subdivide (depth cap) still owns visible area.
+            if isDir { tiles[myTile].renderBackdrop = true }
+            return
+        }
 
         // Children that occupy space, largest first (squarify wants descending sizes).
         let kids = index.children(of: node)
@@ -69,11 +77,16 @@ public enum Treemap {
             .sorted { $0.size > $1.size }
         guard !kids.isEmpty else { return }
 
+        var emitted = 0
         for (childNode, childRect) in squarify(kids, in: rect) where childRect.w >= minSide && childRect.h >= minSide {
             layoutNode(index, node: childNode, rect: childRect, depth: depth + 1,
                        maxDepth: maxDepth, minSide: minSide,
                        coeffs: c, h: h * scale, scale: scale, into: &tiles)
+            emitted += 1
         }
+        // Any child below minSide was skipped — paint this dir as the backdrop under the
+        // gap. (Tiles are parent-before-child, so the backdrop renders first.)
+        if emitted < kids.count { tiles[myTile].renderBackdrop = true }
     }
 
     /// Add a parabolic ridge over [x1,x2] (peaks at the centre, zero slope there; ±slope
@@ -86,64 +99,124 @@ public enum Treemap {
         s2 -= 4 * h / w
     }
 
-    /// Render cushioned, Phong-shaded leaf cells into an RGBA8 pixel buffer (width*height*4,
+    /// Precomputed linear-light → sRGB byte table (per-pixel pow() would dominate the loop).
+    private static let srgbLUT: [UInt8] = (0..<4096).map { i in
+        let v = Double(i) / 4095
+        let s = v <= 0.0031308 ? 12.92 * v : 1.055 * pow(v, 1 / 2.4) - 0.055
+        return UInt8(max(0, min(255, (s * 255).rounded())))
+    }
+
+    private static func toLinear(_ v: Double) -> Double {
+        let c = max(0, min(1, v))
+        return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+    }
+
+    /// Render cushioned, Phong-shaded cells into an RGBA8 pixel buffer (width*height*4,
     /// premultiplied-opaque). No CoreGraphics dependency — pure bytes — so it's testable and
-    /// the caller wraps it in a CGImage. `colorFor` is handed the whole leaf tile (node, depth,
-    /// rect) and returns its base sRGB (0…1) — so color functions can use depth/size, not just type.
+    /// the caller wraps it in a CGImage. `colorFor` is handed the whole tile (node, depth,
+    /// rect) and returns its base sRGB (0…1); it's also called for backdrop DIRECTORY tiles
+    /// (check `tile.isDir`), which paint as flatter pillows under regions whose files were
+    /// too small to emit.
+    ///
+    /// Shading happens in linear light (diffuse + a small Blinn-Phong specular), mapped back
+    /// to sRGB through a LUT; `ambient` keeps its tuned gamma-space meaning (it's converted
+    /// internally), so existing themes look the same at the floor and crisper in the slopes.
+    /// The pixel fill parallelizes across row bands — it's the GUI's whole-canvas cost.
     public static func renderCushionRGBA(
         tiles: [TreemapTile], width: Int, height: Int,
         background: (r: Double, g: Double, b: Double) = (0.043, 0.051, 0.063),
         light: (x: Double, y: Double, z: Double) = (-0.32, -0.45, 0.83),
         ambient: Double = 0.42,
         cushionHeight: Double = 0.6,
+        specular: Double = 0.13,
         colorFor: (TreemapTile) -> (r: Double, g: Double, b: Double)
     ) -> [UInt8] {
         var buf = [UInt8](repeating: 255, count: max(0, width * height * 4))
         guard width > 0, height > 0 else { return buf }
 
-        func u8(_ v: Double) -> UInt8 { UInt8(max(0, min(255, (v * 255).rounded()))) }
-        let bgR = u8(background.r), bgG = u8(background.g), bgB = u8(background.b)
-        for p in 0..<(width * height) {
-            buf[p * 4] = bgR; buf[p * 4 + 1] = bgG; buf[p * 4 + 2] = bgB
+        // Resolve paint order + colors up front: leaves plus backdrop dirs, parent-first
+        // (so backdrops underlay their children), colors linearized once per tile —
+        // colorFor hashes strings and must stay out of the pixel loop.
+        struct Paint {
+            let x0, y0, x1, y1: Int
+            let s1x, s2x, s1y, s2y: Double
+            let r, g, b: Double // linear
         }
-
-        let ll = (light.x * light.x + light.y * light.y + light.z * light.z).squareRoot()
-        let lx = light.x / ll, ly = light.y / ll, lz = light.z / ll
-
-        for t in tiles where !t.isDir {
-            let (cr, cg, cb) = colorFor(t)
+        var paints: [Paint] = []
+        paints.reserveCapacity(tiles.count)
+        for t in tiles where !t.isDir || t.renderBackdrop {
             let rx = t.rect.x, ry = t.rect.y, rw = t.rect.w, rh = t.rect.h
+            guard rw > 0, rh > 0 else { continue }
             let x0 = max(0, Int(rx.rounded(.down)))
             let y0 = max(0, Int(ry.rounded(.down)))
             let x1 = min(width, Int((rx + rw).rounded(.up)))
             let y1 = min(height, Int((ry + rh).rounded(.up)))
-            if x1 <= x0 || y1 <= y0 || rw <= 0 || rh <= 0 { continue }
+            guard x1 > x0, y1 > y0 else { continue }
+            // A FRESH cushion per cell, in the cell's own coordinates — a clean parabolic
+            // pillow peaking dead-center, identical in shape from tile to tile (the
+            // KDirStat/QDirStat look). Backdrop dirs get a flatter pillow so they read as
+            // "ground" under their children.
+            let h = t.isDir ? cushionHeight * 0.5 : cushionHeight
+            let c = colorFor(t)
+            paints.append(Paint(
+                x0: x0, y0: y0, x1: x1, y1: y1,
+                s1x: 4 * h * (2 * rx + rw) / rw, s2x: -4 * h / rw,
+                s1y: 4 * h * (2 * ry + rh) / rh, s2y: -4 * h / rh,
+                r: toLinear(c.r), g: toLinear(c.g), b: toLinear(c.b)))
+        }
 
-            // A FRESH cushion per leaf, in the tile's own coordinates — a clean parabolic pillow
-            // that peaks dead-center of every square, identical in shape from tile to tile (the
-            // KDirStat/QDirStat look). The old code reused the accumulated van Wijk surface, so
-            // each leaf inherited its parents' ridges and its highlight drifted off-center —
-            // that's what read as inconsistent, "droopy" bubbles.
-            let s1x = 4 * cushionHeight * (2 * rx + rw) / rw
-            let s2x = -4 * cushionHeight / rw
-            let s1y = 4 * cushionHeight * (2 * ry + rh) / rh
-            let s2y = -4 * cushionHeight / rh
+        let ll = (light.x * light.x + light.y * light.y + light.z * light.z).squareRoot()
+        let lx = light.x / ll, ly = light.y / ll, lz = light.z / ll
+        // Blinn-Phong halfway vector for the specular (viewer straight on: V = (0,0,1)).
+        let hl = (lx * lx + ly * ly + (lz + 1) * (lz + 1)).squareRoot()
+        let hx = lx / hl, hy = ly / hl, hz = (lz + 1) / hl
+        // Themes tuned their ambient against gamma-space multiply; pow-map it so the
+        // shadow floor matches while the gradient in between becomes physically smooth.
+        let ambientLin = pow(max(0, min(1, ambient)), 2.2)
 
-            for py in y0..<y1 {
-                let fy = Double(py) + 0.5
-                let ny = -(2 * s2y * fy + s1y)
-                let rowBase = py * width
-                for px in x0..<x1 {
-                    let fx = Double(px) + 0.5
-                    let nx = -(2 * s2x * fx + s1x)
-                    let nlen = (nx * nx + ny * ny + 1).squareRoot()
-                    var cosA = (nx * lx + ny * ly + lz) / nlen
-                    if cosA < 0 { cosA = 0 }
-                    let intensity = min(1.0, ambient + (1 - ambient) * cosA)
-                    let i = (rowBase + px) * 4
-                    buf[i] = u8(cr * intensity)
-                    buf[i + 1] = u8(cg * intensity)
-                    buf[i + 2] = u8(cb * intensity)
+        let bgLin = (r: toLinear(background.r), g: toLinear(background.g), b: toLinear(background.b))
+        let bgR = srgbLUT[Int(bgLin.r * 4095)], bgG = srgbLUT[Int(bgLin.g * 4095)], bgB = srgbLUT[Int(bgLin.b * 4095)]
+
+        let lut = srgbLUT
+        let bandH = 64
+        let bands = (height + bandH - 1) / bandH
+        buf.withUnsafeMutableBufferPointer { out in
+            let base = out.baseAddress!
+            DispatchQueue.concurrentPerform(iterations: bands) { band in
+                let by0 = band * bandH
+                let by1 = min(height, by0 + bandH)
+                // Background for this band.
+                for p in (by0 * width)..<(by1 * width) {
+                    base[p * 4] = bgR; base[p * 4 + 1] = bgG; base[p * 4 + 2] = bgB
+                }
+                for t in paints {
+                    let y0 = max(t.y0, by0), y1 = min(t.y1, by1)
+                    guard y1 > y0 else { continue }
+                    for py in y0..<y1 {
+                        let fy = Double(py) + 0.5
+                        let ny = -(2 * t.s2y * fy + t.s1y)
+                        let rowBase = py * width
+                        for px in t.x0..<t.x1 {
+                            let fx = Double(px) + 0.5
+                            let nx = -(2 * t.s2x * fx + t.s1x)
+                            let nlen = (nx * nx + ny * ny + 1).squareRoot()
+                            var cosA = (nx * lx + ny * ly + lz) / nlen
+                            if cosA < 0 { cosA = 0 }
+                            let intensity = min(1.0, ambientLin + (1 - ambientLin) * cosA)
+                            // Specular: cos^16 via four squarings.
+                            var spec = 0.0
+                            if specular > 0 {
+                                var ch = (nx * hx + ny * hy + hz) / nlen
+                                if ch < 0 { ch = 0 }
+                                ch *= ch; ch *= ch; ch *= ch; ch *= ch
+                                spec = specular * ch
+                            }
+                            let i = (rowBase + px) * 4
+                            base[i]     = lut[min(4095, Int((t.r * intensity + spec) * 4095))]
+                            base[i + 1] = lut[min(4095, Int((t.g * intensity + spec) * 4095))]
+                            base[i + 2] = lut[min(4095, Int((t.b * intensity + spec) * 4095))]
+                        }
+                    }
                 }
             }
         }

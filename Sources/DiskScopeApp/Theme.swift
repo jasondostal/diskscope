@@ -31,6 +31,11 @@ struct ThemePalette {
         return Color(.sRGB, red: rgb.r, green: rgb.g, blue: rgb.b)
     }
     var backgroundColor: Color { Color(.sRGB, red: background.r, green: background.g, blue: background.b) }
+
+    /// Neutral fill for directory backdrop tiles (mirrors Core's `Palette.dirFill`).
+    var dirFill: (r: Double, g: Double, b: Double) {
+        (background.r * 0.6 + 0.14, background.g * 0.6 + 0.15, background.b * 0.6 + 0.17)
+    }
 }
 
 struct Theme: Identifiable {

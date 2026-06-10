@@ -174,6 +174,7 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--cushion" {
     let tiles = Treemap.layout(index, root: 0, in: Rect(x: 0, y: 0, w: Double(W), h: Double(H)),
                                minSide: 1.5, cushionHeight: 0.42)
     let rgba = Treemap.renderCushionRGBA(tiles: tiles, width: W, height: H, ambient: palette.ambient) { tile in
+        if tile.isDir { return palette.dirFill }
         var c = recency.apply(palette.srgb(forExt: cliExt(index.nodes[tile.node].name)),
                               modTime: index.nodes[tile.node].modTime, now: now)
         c = depth.apply(c, depth: tile.depth)
@@ -208,6 +209,7 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--term" {
     let tiles = Treemap.layout(index, root: 0, in: Rect(x: 0, y: 0, w: Double(W), h: Double(H)),
                                minSide: 1, cushionHeight: 0.42)
     let rgba = Treemap.renderCushionRGBA(tiles: tiles, width: W, height: H, ambient: palette.ambient) { tile in
+        if tile.isDir { return palette.dirFill }
         var c = recency.apply(palette.srgb(forExt: cliExt(index.nodes[tile.node].name)),
                               modTime: index.nodes[tile.node].modTime, now: now)
         c = depth.apply(c, depth: tile.depth)

@@ -22,6 +22,13 @@ public extension FilePalette {
         public func srgb(_ cat: Category) -> (r: Double, g: Double, b: Double) { FilePalette.srgb(oklch(cat)) }
         public func srgb(forExt e: String) -> (r: Double, g: Double, b: Double) { FilePalette.srgb(oklch(forExt: e)) }
 
+        /// Neutral fill for directory BACKDROP tiles (regions whose files were too small to
+        /// draw): the canvas background lifted toward grey, so it reads as structure, not
+        /// as a hole, in any theme.
+        public var dirFill: (r: Double, g: Double, b: Double) {
+            (background.r * 0.6 + 0.14, background.g * 0.6 + 0.15, background.b * 0.6 + 0.17)
+        }
+
         /// Build a fully-specified palette from a curated hex scheme: each category maps to its own
         /// hex (through the OKLCH pipeline), plus a background hex. This is how themes get GENUINELY
         /// different hue families rather than the same hues at different brightness.

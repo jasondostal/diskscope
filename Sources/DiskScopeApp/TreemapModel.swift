@@ -250,6 +250,7 @@ final class TreemapModel: ObservableObject {
         let rgba = Treemap.renderCushionRGBA(tiles: tiles(for: size), width: w, height: h,
                                              background: pal.background, ambient: pal.ambient) { [weak self] tile in
             guard let self else { return (0.5, 0.5, 0.5) }
+            if tile.isDir { return pal.dirFill } // backdrop under too-small-to-draw files
             let node = tile.node
             let e = self.ext(of: node)
             // Theme color, then the optional layers (each an identity when disabled).
