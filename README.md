@@ -32,14 +32,14 @@ indexes in seconds.
 **Homebrew (recommended):**
 
 ```sh
-brew install --cask --no-quarantine jasondostal/tap/diskscope
+brew install --cask jasondostal/tap/diskscope
+xattr -dr com.apple.quarantine /Applications/DiskScope.app
 ```
 
 DiskScope is independently distributed — ad-hoc signed, not notarized (open source pet
-projects don't pay Apple $99/yr). The `--no-quarantine` flag tells Homebrew you know that,
-and the app opens normally. Without it, macOS blocks first launch; clear it afterwards with
-`xattr -dr com.apple.quarantine /Applications/DiskScope.app`, or use **Open Anyway** in
-System Settings → Privacy & Security.
+projects don't pay Apple $99/yr), so macOS blocks the first launch until you clear the
+quarantine flag (the `xattr` line above) or use **Open Anyway** in System Settings →
+Privacy & Security. (Older Homebrew had `--no-quarantine`; Homebrew 5 removed it.)
 
 **Terminal UI only (no Gatekeeper involved at all):**
 
