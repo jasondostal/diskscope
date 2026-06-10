@@ -35,8 +35,9 @@ public struct ReconcileDelta: Sendable, Equatable {
     /// Net file-count / item-count change under the reconciled directory.
     public var files = 0
     public var items = 0
-    /// Net byte change per file extension ("" = no extension) — feeds incremental legends.
+    /// Net byte / file-count change per extension ("" = no extension) — feeds incremental legends.
     public var extBytes: [String: Int64] = [:]
+    public var extCounts: [String: Int] = [:]
     public init(added: Int = 0, removed: Int = 0, updated: Int = 0) {
         self.added = added; self.removed = removed; self.updated = updated
     }
@@ -44,11 +45,15 @@ public struct ReconcileDelta: Sendable, Equatable {
 
     mutating func addFile(name: String, size: UInt64) {
         bytes += Int64(size); files += 1
-        extBytes[FileIndex.ext(of: name), default: 0] += Int64(size)
+        let e = FileIndex.ext(of: name)
+        extBytes[e, default: 0] += Int64(size)
+        extCounts[e, default: 0] += 1
     }
     mutating func removeFile(name: String, size: UInt64) {
         bytes -= Int64(size); files -= 1
-        extBytes[FileIndex.ext(of: name), default: 0] -= Int64(size)
+        let e = FileIndex.ext(of: name)
+        extBytes[e, default: 0] -= Int64(size)
+        extCounts[e, default: 0] -= 1
     }
     mutating func resizeFile(name: String, from old: UInt64, to new: UInt64) {
         let d = Int64(new) - Int64(old)
