@@ -485,8 +485,22 @@ struct DetailsView: View {
     @Binding var selected: Int?
 
     var body: some View {
+        // No selection (or the root itself) would just repeat the header — name, path,
+        // size, file count all live up there already. Collapse to a hint and give the
+        // vertical space to the legend / reclaim pane below.
+        if selected == nil || selected == 0 {
+            Text("Click a tile or row to inspect")
+                .font(.caption).foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+        } else {
+            details
+        }
+    }
+
+    private var details: some View {
         let s = model.stats(for: selected)
-        VStack(alignment: .leading, spacing: 7) {
+        return VStack(alignment: .leading, spacing: 7) {
             if let s {
                 HStack(spacing: 8) {
                     RoundedRectangle(cornerRadius: 3)
