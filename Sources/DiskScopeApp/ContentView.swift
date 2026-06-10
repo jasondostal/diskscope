@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import QuickLook
 import DiskScopeCore
 
 let bg = Color(red: 0.043, green: 0.051, blue: 0.063) // #0b0d10
@@ -11,6 +12,12 @@ struct ContentView: View {
     @State private var selected: Int?
     @State private var hover: HoverInfo?
     @State private var hasFDA = true
+    // ⌘F search: a compact header field, debounced, with a floating results list.
+    @State private var searchOpen = false
+    @State private var searchText = ""
+    @State private var searchResults: [SearchResult] = []
+    @State private var searchWork: DispatchWorkItem?
+    @FocusState private var searchFocused: Bool
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openSettings) private var openSettings
 
@@ -25,6 +32,12 @@ struct ContentView: View {
         }
         .background(theme.current.palette.backgroundColor)
         .frame(minWidth: 860, minHeight: 600)
+        .overlay(alignment: .topTrailing) { searchOverlay }
+        .background(quickLookShortcut)
+        .quickLookPreview($model.quickLookURL)
+        .onChange(of: model.state) { _, s in
+            if s != .ready { closeSearch() }   // a rescan invalidates result node ids
+        }
         .onAppear {
             model.setPalette(theme.current.palette)
             model.setRecency(theme.recency)
@@ -143,11 +156,23 @@ struct ContentView: View {
             // Stats + controls zone (right). fixedSize on the stats keeps the numbers from ever
             // truncating or wrapping; the Spacer absorbs length changes so the buttons stay put.
             if model.state == .ready {
-                Text("\(humanSize(model.totalSize)) · \(model.fileCount.formatted()) files · \(String(format: "%.1fs", model.scanSeconds))")
+                Text(statsLine)
                     .font(.callout).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).fixedSize()
+                if searchOpen {
+                    TextField("Search files…", text: $searchText)
+                        .textFieldStyle(.roundedBorder).controlSize(.small).font(.caption)
+                        .frame(width: 190)
+                        .focused($searchFocused)
+                        .onExitCommand { closeSearch() }   // Esc dismisses field + results
+                        .onChange(of: searchText) { _, q in scheduleSearch(q) }
+                }
                 // File actions as clean borderless icons (matching the theme menu), tooltips for clarity.
                 HStack(spacing: 12) {
-                    Button { model.scan(model.path) } label: { Image(systemName: "arrow.clockwise") }
+                    Button { toggleSearch() } label: { Image(systemName: "magnifyingglass") }
+                        .help("Search files (⌘F)")
+                        .keyboardShortcut("f")
+                    // Explicit Refresh always means a REAL walk — skip the warm-start snapshot.
+                    Button { model.scan(model.path, force: true) } label: { Image(systemName: "arrow.clockwise") }
                         .help("Rescan this folder")
                     Button { chooseFolder() } label: { Image(systemName: "folder.badge.plus") }
                         .help("Scan a different folder…")
@@ -158,6 +183,93 @@ struct ContentView: View {
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 9)
+    }
+
+    /// Header stats; a warm start advertises itself (and how much journal it replayed)
+    /// so a near-instant "scan" doesn't read as a broken one.
+    private var statsLine: String {
+        var s = "\(humanSize(model.totalSize)) · \(model.fileCount.formatted()) files · \(String(format: "%.1fs", model.scanSeconds))"
+        if let r = model.warmReplayedDirs { s += " · warm (\(r) replayed)" }
+        return s
+    }
+
+    // MARK: - Search (⌘F)
+
+    /// Floating results under the header's search field. An overlay, not a popover — a
+    /// popover becomes the key window and steals focus from the field mid-typing.
+    @ViewBuilder private var searchOverlay: some View {
+        if searchOpen && !searchResults.isEmpty {
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(searchResults, id: \.node) { r in searchRow(r) }
+                }
+                .padding(.vertical, 4)
+            }
+            .frame(width: 400)
+            .frame(maxHeight: 300)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.10)))
+            .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
+            .padding(.trailing, 14)
+            .padding(.top, 42)   // just under the header row, near the field
+        }
+    }
+
+    private func searchRow(_ r: SearchResult) -> some View {
+        // Selecting keeps the list open for further picks; the tree's onChange handles
+        // the reveal/scroll.
+        Button { selected = r.node } label: {
+            HStack(spacing: 8) {
+                Image(systemName: r.isDir ? "folder.fill" : iconForExt(extOf(r.name)))
+                    .font(.caption2).foregroundStyle(.secondary).frame(width: 14)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(r.name).font(.caption).lineLimit(1)
+                    Text(r.path).font(.caption2).foregroundStyle(.tertiary)
+                        .lineLimit(1).truncationMode(.middle)
+                }
+                Spacer(minLength: 8)
+                Text(humanSize(r.size)).font(.caption).monospacedDigit().foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// ~150ms debounce so a fast typist doesn't run a full-index search per keystroke.
+    private func scheduleSearch(_ q: String) {
+        searchWork?.cancel()
+        let needle = q.trimmingCharacters(in: .whitespaces)
+        guard !needle.isEmpty else { searchResults = []; return }   // cleared → results close
+        let item = DispatchWorkItem { searchResults = model.search(needle) }
+        searchWork = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: item)
+    }
+
+    private func toggleSearch() {
+        if searchOpen { closeSearch() }
+        else {
+            searchOpen = true
+            DispatchQueue.main.async { searchFocused = true } // field must exist before focusing
+        }
+    }
+
+    private func closeSearch() {
+        searchWork?.cancel()
+        searchOpen = false; searchText = ""; searchResults = []; searchFocused = false
+    }
+
+    // MARK: - Quick Look (Space)
+
+    /// Hidden Space shortcut → Quick Look the selection. Not registered while the search
+    /// field is focused, so typing a space stays a space.
+    @ViewBuilder private var quickLookShortcut: some View {
+        if !searchFocused {
+            Button("") { if let sel = selected { model.quickLook(sel) } }
+                .keyboardShortcut(.space, modifiers: [])
+                .opacity(0)
+                .accessibilityHidden(true)
+        }
     }
 
     private var footer: some View {
@@ -500,19 +612,26 @@ struct TreemapCanvas: View {
     @ObservedObject var model: TreemapModel
     @Binding var selected: Int?
     @Binding var hover: HoverInfo?
+    @Environment(\.displayScale) private var displayScale
 
     var body: some View {
         GeometryReader { geo in
             let tiles = model.tiles(for: geo.size)
             ZStack {
-                // Cushioned, Phong-shaded leaves (bitmap).
-                if let img = model.cushionImage(for: geo.size) {
-                    Image(decorative: img, scale: 1).resizable().frame(width: geo.size.width, height: geo.size.height)
+                // Cushioned, Phong-shaded leaves — a PIXEL-resolution bitmap displayed at
+                // its native scale, so Retina shows crisp pillows instead of an upscale.
+                if let img = model.cushionImage(for: geo.size, scale: displayScale) {
+                    Image(decorative: img, scale: displayScale)
+                        .resizable().frame(width: geo.size.width, height: geo.size.height)
                 }
                 // Overlays: structure + selection + hover outlines.
                 Canvas { ctx, _ in
-                    for t in tiles where t.isDir && t.depth == 1 {
-                        ctx.stroke(Path(cg(t.rect)), with: .color(.white.opacity(0.20)), lineWidth: 1)
+                    // Every folder outline, fading with depth — top-level partitions read
+                    // strongest, deep nesting stays a whisper instead of a grid of noise.
+                    // (depth 0 is the layout root: it's the whole canvas, skip it.)
+                    for t in tiles where t.isDir && t.depth >= 1 {
+                        let alpha = max(0.05, 0.22 - 0.05 * Double(t.depth - 1))
+                        ctx.stroke(Path(cg(t.rect)), with: .color(.white.opacity(alpha)), lineWidth: 1)
                     }
                     if let sel = selected, let t = tiles.first(where: { $0.node == sel }) {
                         ctx.stroke(Path(cg(t.rect)), with: .color(.white), lineWidth: 2)
@@ -527,14 +646,21 @@ struct TreemapCanvas: View {
             .onContinuousHover { phase in
                 switch phase {
                 case .active(let pt):
-                    if let t = hitTest(tiles, pt), let info = model.info(for: t.node) {
+                    if let t = model.leafTile(at: pt), let info = model.info(for: t.node) {
                         hover = HoverInfo(node: t.node, path: info.path, size: info.size)
                     } else { hover = nil }
                 case .ended: hover = nil
                 }
             }
             .gesture(SpatialTapGesture().onEnded { ev in
-                if let t = hitTest(tiles, ev.location) { selected = t.node }
+                if let t = model.leafTile(at: ev.location) { selected = t.node }
+            })
+            // Double-click drills the treemap into the deepest folder under the cursor;
+            // double-clicking when already focused on that exact folder toggles back out.
+            .simultaneousGesture(SpatialTapGesture(count: 2).onEnded { ev in
+                guard let t = model.dirTile(at: ev.location) else { return }
+                if t.node == model.treemapRoot { model.clearTreemapFocus() }
+                else { model.focusTreemap(on: t.node) }
             })
             .contextMenu {
                 if let node = hover?.node ?? selected { fileMenu(model, node) }
@@ -558,10 +684,6 @@ struct TreemapCanvas: View {
     }
 
     private func cg(_ r: Rect) -> CGRect { CGRect(x: r.x, y: r.y, width: max(0, r.w), height: max(0, r.h)) }
-
-    private func hitTest(_ tiles: [TreemapTile], _ p: CGPoint) -> TreemapTile? {
-        tiles.last { !$0.isDir && cg($0.rect).contains(p) }
-    }
 }
 
 // MARK: - Color helpers
@@ -574,6 +696,7 @@ func fileMenu(_ model: TreemapModel, _ node: Int) -> some View {
     }
     Button { model.reveal(node) } label: { Label("Reveal in Finder", systemImage: "folder") }
     Button { model.open(node) } label: { Label("Open", systemImage: "arrow.up.forward.app") }
+    Button { model.quickLook(node) } label: { Label("Quick Look", systemImage: "eye") }
     Divider()
     Button(role: .destructive) { model.moveToTrash(node) } label: { Label("Move to Trash", systemImage: "trash") }
 }
