@@ -8,6 +8,33 @@ import DiskScopeCore
 // and a Spotlight-style floating panel. The app window is just ONE client of the engine —
 // closing it drops DiskScope to a menu-bar item; the index and hotkey live on.
 
+/// Selectable global-hotkey combos (a full key recorder is a later nicety; presets cover
+/// the conflicts — e.g. rill already owns ⌥Space on this machine).
+enum HotKeyPreset: String, CaseIterable, Identifiable {
+    case optSpace, ctrlSpace, ctrlOptSpace, cmdShiftSpace, disabled
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .optSpace:      return "⌥ Space"
+        case .ctrlSpace:     return "⌃ Space"
+        case .ctrlOptSpace:  return "⌃⌥ Space"
+        case .cmdShiftSpace: return "⇧⌘ Space"
+        case .disabled:      return "Disabled"
+        }
+    }
+
+    var carbon: (key: UInt32, mods: UInt32)? {
+        switch self {
+        case .optSpace:      return (UInt32(kVK_Space), UInt32(optionKey))
+        case .ctrlSpace:     return (UInt32(kVK_Space), UInt32(controlKey))
+        case .ctrlOptSpace:  return (UInt32(kVK_Space), UInt32(controlKey | optionKey))
+        case .cmdShiftSpace: return (UInt32(kVK_Space), UInt32(cmdKey | shiftKey))
+        case .disabled:      return nil
+        }
+    }
+}
+
 /// App-lifetime owner of the search engine + hotkey + panel. A singleton so the SwiftUI
 /// scenes and the NSApplicationDelegate can share it without plumbing.
 final class SearchAgent: ObservableObject {
@@ -16,15 +43,30 @@ final class SearchAgent: ObservableObject {
     let service = SearchService()
     @Published var volumes: [SearchService.VolumeInfo] = []
     @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @Published var hotKeyPreset: HotKeyPreset {
+        didSet {
+            UserDefaults.standard.set(hotKeyPreset.rawValue, forKey: "diskscope.hotkey")
+            registerHotKey()
+        }
+    }
 
     private var hotKey: GlobalHotKey?
     private var panel: SearchPanelController?
-    private init() {}
+    private init() {
+        hotKeyPreset = HotKeyPreset(rawValue:
+            UserDefaults.standard.string(forKey: "diskscope.hotkey") ?? "") ?? .optSpace
+    }
+
+    private func registerHotKey() {
+        hotKey = nil // unregister the old combo first (deinit)
+        guard let c = hotKeyPreset.carbon else { return }
+        hotKey = GlobalHotKey(keyCode: c.key, modifiers: c.mods) { [weak self] in self?.togglePanel() }
+    }
 
     func start() {
         guard panel == nil else { return }
         panel = SearchPanelController(service: service)
-        hotKey = GlobalHotKey { [weak self] in self?.togglePanel() }
+        registerHotKey()
         service.onChange = { [weak self] in self?.volumes = $0 }
         service.start()
 
@@ -276,7 +318,9 @@ struct SearchAgentMenu: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Button("Search Everywhere   ⌥Space") { agent.togglePanel() }
+        Button(agent.hotKeyPreset == .disabled
+               ? "Search Everywhere"
+               : "Search Everywhere   \(agent.hotKeyPreset.label)") { agent.togglePanel() }
         Button("Open DiskScope") {
             NSApp.setActivationPolicy(.regular)
             openWindow(id: "main")

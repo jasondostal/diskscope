@@ -5,13 +5,36 @@ import DiskScopeCore
 struct SettingsView: View {
     @EnvironmentObject var theme: ThemeManager
     @EnvironmentObject var settings: SettingsStore
+    @ObservedObject private var agent = SearchAgent.shared
     @State private var editingCat: FilePalette.Category = .image
 
     var body: some View {
         TabView {
             appearance.tabItem { Label("Appearance", systemImage: "paintpalette") }
+            search.tabItem { Label("Search", systemImage: "magnifyingglass") }
         }
         .frame(width: 460, height: theme.isCustom ? 700 : 400)
+    }
+
+    private var search: some View {
+        Form {
+            Picker("Global hotkey", selection: $agent.hotKeyPreset) {
+                ForEach(HotKeyPreset.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.menu)
+            Text("Opens the search-everywhere panel from any app. Pick a combo nothing else owns (input-source switchers and certain memory daemons are notorious squatters).")
+                .font(.caption).foregroundStyle(.secondary)
+
+            Divider().padding(.vertical, 2)
+
+            Toggle("Launch at login", isOn: Binding(
+                get: { agent.launchAtLogin },
+                set: { agent.setLaunchAtLogin($0) }))
+            Text("Keeps the index warm and the hotkey live from boot — the menu-bar agent starts quietly, no window.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .formStyle(.grouped)
+        .padding()
     }
 
     private var appearance: some View {

@@ -356,11 +356,31 @@ final class TreemapModel: ObservableObject {
 
     // MARK: - Tiles + hit-testing
 
-    /// Tiles laid out for the given canvas size (cached). Recomputing also rebuilds the
-    /// hover hit-test grid.
-    func tiles(for size: CGSize) -> [TreemapTile] {
-        guard let index, size.width > 4, size.height > 4 else { return [] }
-        if size == cachedSize, !cachedTiles.isEmpty { return cachedTiles }
+    // Live-resize coalescing: a window drag delivers a new canvas size EVERY FRAME, and a
+    // full relayout + Retina re-render is ~100ms+ of main-thread work — doing it per
+    // frame is what made resizing janky. Instead: keep serving the stale tiles/bitmap
+    // (the view stretches the bitmap on the GPU) and recompute ONCE, shortly after the
+    // size stops changing.
+    private var relayoutWork: DispatchWorkItem?
+    private var pendingSize: CGSize = .zero
+    private var pendingScale: CGFloat = 1
+
+    private func scheduleRelayout(size: CGSize, scale: CGFloat? = nil) {
+        pendingSize = size
+        if let scale { pendingScale = scale }
+        relayoutWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.relayoutWork = nil
+            self.relayout(to: self.pendingSize)
+            self.revision += 1   // body re-runs; caches now match → crisp render
+        }
+        relayoutWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+
+    private func relayout(to size: CGSize) {
+        guard let index, size.width > 4, size.height > 4 else { return }
         let root = (treemapRoot >= 0 && treemapRoot < index.nodes.count) ? treemapRoot : 0
         cachedTiles = Treemap.layout(
             index, root: root,
@@ -368,6 +388,21 @@ final class TreemapModel: ObservableObject {
             minSide: minSide, cushionHeight: 0.42)
         cachedSize = size
         rebuildGrid()
+        pixelTiles = []; pixelSize = .zero; pixelScale = 0
+        cushionCache = nil; cushionSize = .zero
+    }
+
+    /// Tiles laid out for the given canvas size. On a size mismatch with content already
+    /// on screen, returns the STALE tiles and schedules the debounced relayout — only the
+    /// very first layout (nothing to show yet) computes synchronously.
+    func tiles(for size: CGSize) -> [TreemapTile] {
+        guard index != nil, size.width > 4, size.height > 4 else { return [] }
+        if size == cachedSize, !cachedTiles.isEmpty { return cachedTiles }
+        if cachedTiles.isEmpty {
+            relayout(to: size)
+        } else {
+            scheduleRelayout(size: size)
+        }
         return cachedTiles
     }
 
@@ -450,6 +485,14 @@ final class TreemapModel: ObservableObject {
         guard index != nil, size.width > 2, size.height > 2 else { return nil }
         if size == cushionSize, scale == cushionScale, cushionHighlight == highlightExt,
            let c = cushionCache { return c }
+        // Mid-resize (layout cache doesn't match this size yet): serve the stale bitmap —
+        // the view stretches it — and let the debounced relayout produce the crisp one.
+        // Render NOW only when the layout already settled at this size (or there's no
+        // bitmap at all yet — first paint, theme flip, highlight change).
+        if size != cachedSize {
+            scheduleRelayout(size: size, scale: scale)
+            if let c = cushionCache { return c }
+        }
         let s = max(1, scale)
         let w = Int((size.width * s).rounded()), h = Int((size.height * s).rounded())
         let pal = palette
