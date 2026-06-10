@@ -108,6 +108,9 @@ struct ContentView: View {
                     .lineLimit(1).truncationMode(.middle).frame(maxWidth: 360)
             }
         case .ready:
+            // WinDirStat's split: tree + inspector share the top row; the treemap spans
+            // the FULL width below — never cut off. The inspector stays terse (see
+            // DetailsView) so the legend/reclaim list gets the column's height.
             VSplitView {
                 HSplitView {
                     TreeListView(model: model, selected: $selected)
@@ -115,8 +118,7 @@ struct ContentView: View {
                     VStack(spacing: 0) {
                         DetailsView(model: model, selected: $selected)
                         Divider().overlay(Color.white.opacity(0.08))
-                        // Bottom of the inspector column: file-type legend or the
-                        // reclaimable-space pane (where-did-my-disk-go + known hogs).
+                        // File-type legend or the reclaimable-space pane.
                         Picker("", selection: $rightTab) {
                             Text("File types").tag(0)
                             Text("Reclaim").tag(1)
@@ -129,7 +131,7 @@ struct ContentView: View {
                             ReclaimView(model: model, selected: $selected)
                         }
                     }
-                    .frame(minWidth: 250, idealWidth: 300, maxWidth: 400)
+                    .frame(minWidth: 260, idealWidth: 320, maxWidth: 420)
                 }
                 .frame(minHeight: 150)
                 TreemapCanvas(model: model, selected: $selected, hover: $hover)
@@ -500,32 +502,33 @@ struct DetailsView: View {
 
     private var details: some View {
         let s = model.stats(for: selected)
-        return VStack(alignment: .leading, spacing: 7) {
+        return VStack(alignment: .leading, spacing: 5) {
             if let s {
+                // Terse on purpose: the tree row already shows %, files, size, and
+                // modified for the selection — repeating them here was the triplication.
+                // Only what the tree CAN'T show lives here: full path, type, created,
+                // item count, share-of-parent, and the actions.
                 HStack(spacing: 8) {
                     RoundedRectangle(cornerRadius: 3)
                         .fill(s.isDir ? Color.secondary.opacity(0.5) : model.palette.color(s.category))
                         .frame(width: 13, height: 13)
                     Image(systemName: s.isDir ? "folder.fill" : iconForExt(s.ext))
                         .font(.caption).foregroundStyle(.secondary)
-                    Text(s.name).font(.headline).lineLimit(2).truncationMode(.middle)
+                    Text(s.name).font(.headline).lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 6)
+                    Text(humanSize(s.size)).font(.callout).monospacedDigit().foregroundStyle(.secondary)
                 }
-                Text(typeLine(s)).font(.caption).foregroundStyle(.secondary)
                 Text(s.path).font(.caption2).foregroundStyle(.tertiary)
-                    .lineLimit(2).truncationMode(.middle).textSelection(.enabled)
-
-                Divider().overlay(Color.white.opacity(0.06)).padding(.vertical, 1)
-
-                // Two columns that fill the panel width — label left, value right within each half —
-                // so the stats use the space instead of clustering on the left.
-                VStack(spacing: 6) {
-                    statPair("Size", humanSize(s.size), "Disk", pct(s.fractionOfTotal))
-                    if s.isDir {
-                        statPair("Files", s.subtreeFiles.formatted(), "Items", s.subtreeItems.formatted())
+                    .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                HStack(spacing: 4) {
+                    Text(metaLine(s)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer(minLength: 6)
+                    if !s.isRoot {
+                        Text(pct(s.fractionOfParent) + " of parent")
+                            .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
+                        PercentBar(fraction: s.fractionOfParent).frame(width: 44, height: 6)
                     }
-                    statPair("Modified", shortDate(s.modTime), "Created", shortDate(s.createTime))
                 }
-                if !s.isRoot { shareOfParent(s) }
 
                 if !s.isRoot, let sel = selected {
                     HStack(spacing: 8) {
@@ -543,38 +546,22 @@ struct DetailsView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
+        .padding(.horizontal, 12).padding(.vertical, 9)
     }
 
-    private func typeLine(_ s: NodeStats) -> String {
-        if s.isDir { return s.isRoot ? "Scanned folder" : "Folder" }
-        let desc = FilePalette.description(forExt: s.ext)
-        return s.ext.isEmpty ? desc : "\(desc) · .\(s.ext)"
+    /// The not-in-the-tree facts on one line: type (files) or item count (dirs), + created.
+    private func metaLine(_ s: NodeStats) -> String {
+        var parts: [String] = []
+        if s.isDir {
+            parts.append("\(s.subtreeItems.formatted()) items")
+        } else {
+            let desc = FilePalette.description(forExt: s.ext)
+            parts.append(s.ext.isEmpty ? desc : "\(desc) · .\(s.ext)")
+        }
+        if s.createTime > 0 { parts.append("created \(shortDate(s.createTime))") }
+        return parts.joined(separator: " · ")
     }
     private func pct(_ f: Double) -> String { String(format: "%.1f%%", f * 100) }
-
-    private func cell(_ label: String, _ value: String) -> some View {
-        HStack(spacing: 5) {
-            Text(label).font(.caption2).foregroundStyle(.secondary)
-            Spacer(minLength: 4)
-            Text(value).font(.caption).monospacedDigit()
-        }
-    }
-    /// Two stat cells side by side, each filling half the row (value right-aligned in its half).
-    private func statPair(_ l1: String, _ v1: String, _ l2: String, _ v2: String) -> some View {
-        HStack(spacing: 18) {
-            cell(l1, v1)
-            cell(l2, v2)
-        }
-    }
-    private func shareOfParent(_ s: NodeStats) -> some View {
-        HStack(spacing: 5) {
-            Text("Share of parent").font(.caption2).foregroundStyle(.secondary)
-            Text(pct(s.fractionOfParent)).font(.caption).monospacedDigit()
-            PercentBar(fraction: s.fractionOfParent).frame(width: 50, height: 6)
-            Spacer(minLength: 0)
-        }
-    }
 }
 
 // MARK: - Legend (click a type to isolate it on the treemap)
