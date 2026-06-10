@@ -32,13 +32,17 @@ indexes in seconds.
 **Homebrew (recommended):**
 
 ```sh
-brew install --cask jasondostal/tap/diskscope
+brew install --cask --no-quarantine jasondostal/tap/diskscope
 ```
 
-**Or grab the DMG** from the [latest release](https://github.com/jasondostal/diskscope/releases/latest).
-Direct downloads are ad-hoc signed (not notarized), so macOS will flag it as from an
-unidentified developer — right-click the app → **Open** the first time (or **Open Anyway** in
-System Settings → Privacy & Security). Homebrew installs handle this for you.
+DiskScope is independently distributed — ad-hoc signed, not notarized (open source pet
+projects don't pay Apple $99/yr). The `--no-quarantine` flag tells Homebrew you know that,
+and the app opens normally. Without it, macOS blocks first launch; clear it afterwards with
+`xattr -dr com.apple.quarantine /Applications/DiskScope.app`, or use **Open Anyway** in
+System Settings → Privacy & Security.
+
+**Or grab the DMG** from the [latest release](https://github.com/jasondostal/diskscope/releases/latest)
+— the same quarantine note applies.
 
 Requires **macOS 14+**. It is intentionally not sandboxed — a whole-disk indexer needs to read
 the whole disk.
