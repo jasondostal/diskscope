@@ -374,6 +374,40 @@ public final class FileIndex: ScanSink {
         return out
     }
 
+    /// Node for an absolute path: directories resolve via the path map; files resolve via
+    /// their parent directory + a child-name scan. nil if outside the scan (or deleted).
+    public func node(forPath path: String) -> Int? {
+        if let d = pathToDir[path] { return d }
+        let parent = (path as NSString).deletingLastPathComponent
+        let name = (path as NSString).lastPathComponent
+        guard let p = pathToDir[parent] else { return nil }
+        var c = nodes[p].firstChild
+        while c >= 0 {
+            let i = Int(c)
+            if !nodes[i].deleted, nodes[i].name == name { return i }
+            c = nodes[i].nextSibling
+        }
+        return nil
+    }
+
+    /// Total bytes + count of the TOPMOST directories with this exact name — a
+    /// node_modules nested inside another node_modules is already inside its ancestor's
+    /// totalSize, so counting it again would double-bill. Drives "reclaimable" aggregates.
+    public func aggregateDirs(named name: String) -> (bytes: UInt64, count: Int) {
+        var bytes: UInt64 = 0
+        var count = 0
+        outer: for i in nodes.indices where nodes[i].isDir && !nodes[i].deleted && nodes[i].name == name {
+            var p = Int(nodes[i].parent)
+            while p >= 0 {
+                if nodes[p].isDir, !nodes[p].deleted, nodes[p].name == name { continue outer }
+                p = Int(nodes[p].parent)
+            }
+            bytes += nodes[i].totalSize
+            count += 1
+        }
+        return (bytes, count)
+    }
+
     /// Reconstruct an absolute path by walking parent links to the root.
     public func path(of index: Int) -> String {
         var comps: [String] = []

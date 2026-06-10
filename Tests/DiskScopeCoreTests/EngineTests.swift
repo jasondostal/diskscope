@@ -190,6 +190,32 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(live, index.nodes[0].totalSize)
     }
 
+    // MARK: - Reclaimables helpers
+
+    func testNodeForPath() {
+        let index = builtIndex()
+        XCTAssertNotNil(index.node(forPath: root.path + "/sub"), "directory resolves")
+        XCTAssertNotNil(index.node(forPath: root.path + "/sub/b.txt"), "file resolves via parent")
+        XCTAssertNil(index.node(forPath: root.path + "/sub/nope.txt"))
+        XCTAssertNil(index.node(forPath: "/not/in/scan"))
+    }
+
+    func testAggregateDirsTopmostOnly() throws {
+        // root/node_modules/a.bin + root/node_modules/nested/node_modules/b.bin —
+        // the nested one must NOT double-count (it's inside the topmost's totalSize).
+        let nm = root.appendingPathComponent("node_modules")
+        let nested = nm.appendingPathComponent("nested/node_modules")
+        try fm.createDirectory(at: nested, withIntermediateDirectories: true)
+        try Data(count: 4096).write(to: nm.appendingPathComponent("a.bin"))
+        try Data(count: 4096).write(to: nested.appendingPathComponent("b.bin"))
+        let index = builtIndex()
+        let agg = index.aggregateDirs(named: "node_modules")
+        XCTAssertEqual(agg.count, 1, "only the topmost node_modules counts")
+        let topmost = index.node(forPath: nm.path)!
+        XCTAssertEqual(agg.bytes, index.nodes[topmost].totalSize, "bytes = topmost subtree")
+        XCTAssertGreaterThanOrEqual(agg.bytes, 8192, "includes the nested file once")
+    }
+
     // MARK: - IndexStore (persistent snapshot round-trip)
 
     func testIndexStoreRoundTrip() throws {

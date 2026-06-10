@@ -12,6 +12,7 @@ struct ContentView: View {
     @State private var selected: Int?
     @State private var hover: HoverInfo?
     @State private var hasFDA = true
+    @State private var rightTab = 0   // inspector bottom: 0 = file types, 1 = reclaim
     // ⌘F search: a compact header field, debounced, with a floating results list.
     @State private var searchOpen = false
     @State private var searchText = ""
@@ -114,7 +115,19 @@ struct ContentView: View {
                     VStack(spacing: 0) {
                         DetailsView(model: model, selected: $selected)
                         Divider().overlay(Color.white.opacity(0.08))
-                        LegendView(model: model)
+                        // Bottom of the inspector column: file-type legend or the
+                        // reclaimable-space pane (where-did-my-disk-go + known hogs).
+                        Picker("", selection: $rightTab) {
+                            Text("File types").tag(0)
+                            Text("Reclaim").tag(1)
+                        }
+                        .pickerStyle(.segmented).labelsHidden().controlSize(.small)
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        if rightTab == 0 {
+                            LegendView(model: model)
+                        } else {
+                            ReclaimView(model: model, selected: $selected)
+                        }
                     }
                     .frame(minWidth: 250, idealWidth: 300, maxWidth: 400)
                 }

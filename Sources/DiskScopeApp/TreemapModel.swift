@@ -539,6 +539,30 @@ final class TreemapModel: ObservableObject {
         return chain.reversed()
     }
 
+    // MARK: - Reclaimables
+
+    /// Known space hogs found in the current index (no disk walk — arena lookups only).
+    func reclaimables() -> [ReclaimableItem] {
+        guard let index else { return [] }
+        return Reclaimables.compute(index: index)
+    }
+
+    /// Header accounting for the reclaim pane. The tmutil snapshot listing blocks (~ms,
+    /// but it's a Process) — assembled off-main, delivered on main.
+    func spaceAccounting(completion: @escaping (SpaceAccounting) -> Void) {
+        let scanned = totalSize
+        let vol = volumeUsedBytes(path)
+        let unreadable = index?.unreadableCount ?? 0
+        DispatchQueue.global(qos: .utility).async {
+            let snaps = Reclaimables.localSnapshots()
+            DispatchQueue.main.async {
+                completion(SpaceAccounting(scannedBytes: scanned, volumeUsedBytes: vol,
+                                           snapshotCount: snaps.count, oldestSnapshot: snaps.oldest,
+                                           unreadableDirs: unreadable))
+            }
+        }
+    }
+
     // MARK: - Search (⌘F)
 
     /// Top matches by size. FileIndex.search caps the scan at `limit` hits (arena order);
