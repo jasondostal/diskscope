@@ -69,6 +69,9 @@ public struct SearchResult {
     public let path: String
     public let size: UInt64
     public let isDir: Bool
+    /// Match quality: 0 prefix · 1 word-start · 2 mid-word · 3 filter-only. Exposed so a
+    /// multi-volume merge can re-rank across indexes without re-deriving it.
+    public let rank: UInt8
 }
 
 /// The index engine — the product. Both v1.0 search and v1.1 treemap are clients of this.
@@ -369,14 +372,17 @@ public final class FileIndex: ScanSink {
 
     // MARK: - Search (v1.0)
 
-    /// Case-insensitive substring search, Everything-style: one memmem(3) sweep over the
-    /// contiguous name blob (~ms per keystroke on a million names), then rank — prefix
-    /// match beats word-start beats mid-word, ties broken by size descending (this is a
+    /// Everything-style search: parse the raw query (bare tokens AND-match the name;
+    /// `ext:` `size:` `kind:` `path:` filter — see SearchQuery), sweep the contiguous name
+    /// blob with one memmem(3) pass (~ms per keystroke on a million names), then rank —
+    /// prefix beats word-start beats mid-word, ties broken by size descending (this is a
     /// disk tool: the biggest match is almost always the one you want).
-    public func search(_ query: String, limit: Int = 1000) -> [SearchResult] {
-        let needle = Array(query.lowercased().utf8)
-        // '/' is the blob separator and can't occur in a filename — no name can match.
-        guard !needle.isEmpty, !needle.contains(0x2F) else { return [] }
+    public func search(_ raw: String, limit: Int = 1000) -> [SearchResult] {
+        search(SearchQuery.parse(raw), limit: limit)
+    }
+
+    public func search(_ q: SearchQuery, limit: Int = 1000) -> [SearchResult] {
+        guard !q.isEmpty, !q.impossible else { return [] }
 
         struct Hit { let node: Int; let rank: UInt8; let size: UInt64 }
         var hits: [Hit] = []
@@ -385,23 +391,50 @@ public final class FileIndex: ScanSink {
         // arena order — fine for a query that broad.)
         let maxHits = 50_000
 
-        nameBlob.withUnsafeBufferPointer { blob in
-            guard let base = blob.baseAddress, !blob.isEmpty else { return }
-            needle.withUnsafeBufferPointer { np in
-                var pos = 0
-                while pos < blob.count, hits.count < maxHits {
-                    guard let found = memmem(base + pos, blob.count - pos, np.baseAddress!, np.count) else { break }
-                    let at = UnsafeRawPointer(found) - UnsafeRawPointer(base)
-                    // Which name? Last start <= at (nameStart is ascending).
-                    var lo = 0, hi = nameStart.count - 1
-                    while lo < hi {
-                        let mid = (lo + hi + 1) >> 1
-                        if Int(nameStart[mid]) <= at { lo = mid } else { hi = mid - 1 }
-                    }
-                    let node = lo
-                    let start = Int(nameStart[node])
-                    let end = node + 1 < nameStart.count ? Int(nameStart[node + 1]) - 1 : nameBlob.count - 1
-                    if !nodes[node].deleted {
+        // Cheap predicates inline; the path filter (string-builds per candidate) last.
+        func passesFilters(_ node: Int, _ n: IndexNode, _ size: UInt64) -> Bool {
+            if let kd = q.kindDir, n.isDir != kd { return false }
+            if let mn = q.sizeMin, size < mn { return false }
+            if let mx = q.sizeMax, size > mx { return false }
+            if let e = q.ext, n.isDir || FileIndex.ext(of: n.name) != e { return false }
+            if let p = q.pathNeedle, !path(of: node).lowercased().contains(p) { return false }
+            return true
+        }
+
+        if let primary = q.primary {
+            let secondaries = q.needles.filter { $0 != primary }
+            nameBlob.withUnsafeBufferPointer { blob in
+                guard let base = blob.baseAddress, !blob.isEmpty else { return }
+                primary.withUnsafeBufferPointer { np in
+                    var pos = 0
+                    while pos < blob.count, hits.count < maxHits {
+                        guard let found = memmem(base + pos, blob.count - pos, np.baseAddress!, np.count) else { break }
+                        let at = UnsafeRawPointer(found) - UnsafeRawPointer(base)
+                        // Which name? Last start <= at (nameStart is ascending).
+                        var lo = 0, hi = nameStart.count - 1
+                        while lo < hi {
+                            let mid = (lo + hi + 1) >> 1
+                            if Int(nameStart[mid]) <= at { lo = mid } else { hi = mid - 1 }
+                        }
+                        let node = lo
+                        let start = Int(nameStart[node])
+                        let end = node + 1 < nameStart.count ? Int(nameStart[node + 1]) - 1 : nameBlob.count - 1
+                        defer { pos = end + 1 } // one hit per name — skip to the next name
+
+                        guard !nodes[node].deleted else { continue }
+                        // Remaining needles must ALSO appear somewhere in this name.
+                        var allMatch = true
+                        for s in secondaries where allMatch {
+                            allMatch = s.withUnsafeBufferPointer { sp in
+                                memmem(base + start, end - start, sp.baseAddress!, sp.count) != nil
+                            }
+                        }
+                        guard allMatch else { continue }
+
+                        let n = nodes[node]
+                        let size = n.isDir ? n.totalSize : n.ownSize
+                        guard passesFilters(node, n, size) else { continue }
+
                         let rank: UInt8
                         if at == start {
                             rank = 0                       // prefix
@@ -411,16 +444,24 @@ public final class FileIndex: ScanSink {
                             rank = (prev == 0x2E || prev == 0x2D || prev == 0x5F || prev == 0x20
                                     || prev == 0x28 || prev == 0x5B || prev == 0x2B) ? 1 : 2
                         }
-                        let n = nodes[node]
-                        hits.append(Hit(node: node, rank: rank, size: n.isDir ? n.totalSize : n.ownSize))
+                        hits.append(Hit(node: node, rank: rank, size: size))
                     }
-                    pos = end + 1 // one hit per name — skip to the next name
                 }
+            }
+        } else {
+            // Filter-only query (e.g. "size:>1gb ext:dmg"): one arena walk, cheap checks.
+            for i in nodes.indices {
+                let n = nodes[i]
+                guard !n.deleted else { continue }
+                let size = n.isDir ? n.totalSize : n.ownSize
+                guard passesFilters(i, n, size) else { continue }
+                hits.append(Hit(node: i, rank: 3, size: size))
+                if hits.count >= maxHits { break }
             }
         }
 
         hits.sort { $0.rank != $1.rank ? $0.rank < $1.rank : $0.size > $1.size }
-        return hits.prefix(limit).map { result(for: $0.node) }
+        return hits.prefix(limit).map { result(for: $0.node, rank: $0.rank) }
     }
 
     /// Node for an absolute path: directories resolve via the path map; files resolve via
@@ -466,9 +507,9 @@ public final class FileIndex: ScanSink {
         return comps.isEmpty ? base : base + "/" + comps.reversed().joined(separator: "/")
     }
 
-    private func result(for index: Int) -> SearchResult {
+    private func result(for index: Int, rank: UInt8 = 3) -> SearchResult {
         let n = nodes[index]
         return SearchResult(node: index, name: n.name, path: path(of: index),
-                            size: n.isDir ? n.totalSize : n.ownSize, isDir: n.isDir)
+                            size: n.isDir ? n.totalSize : n.ownSize, isDir: n.isDir, rank: rank)
     }
 }

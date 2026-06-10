@@ -109,6 +109,74 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(index.search("file-", limit: 50).count, 50)
     }
 
+    // MARK: - Query language (ext: / size: / kind: / path: / AND tokens)
+
+    func testQueryParsing() {
+        let q = SearchQuery.parse("report q3 ext:.PDF size:>1.5gb size:<2tb kind:file path:Working")
+        XCTAssertEqual(q.needles.count, 2)
+        XCTAssertEqual(q.ext, "pdf", "leading dot + case folded")
+        XCTAssertEqual(q.sizeMin, UInt64(1.5 * 1024 * 1024 * 1024))
+        XCTAssertEqual(q.sizeMax, UInt64(2) << 40)
+        XCTAssertEqual(q.kindDir, false)
+        XCTAssertEqual(q.pathNeedle, "working")
+        XCTAssertEqual(String(decoding: q.primary ?? [], as: UTF8.self), "report")
+        XCTAssertTrue(SearchQuery.parse("a/b").impossible, "'/' in a name token can't match")
+        XCTAssertTrue(SearchQuery.parse("   ").isEmpty)
+    }
+
+    func testFilteredSearch() {
+        let index = FileIndex()
+        let root = index.directory(parent: -1, name: "/r", allocSize: 0, modTime: 0, createTime: 0)
+        let sub = index.directory(parent: root, name: "models", allocSize: 0, modTime: 0, createTime: 0)
+        index.file(parent: sub, name: "llama-huge.gguf", allocSize: 5 << 30, modTime: 0, createTime: 0)
+        index.file(parent: sub, name: "llama-tiny.gguf", allocSize: 100 << 20, modTime: 0, createTime: 0)
+        index.file(parent: root, name: "llama-notes.txt", allocSize: 4096, modTime: 0, createTime: 0)
+        index.aggregate()
+
+        XCTAssertEqual(index.search("llama ext:gguf").count, 2)
+        XCTAssertEqual(index.search("llama ext:gguf size:>1gb").map(\.name), ["llama-huge.gguf"])
+        XCTAssertEqual(index.search("llama size:<1mb").map(\.name), ["llama-notes.txt"])
+        XCTAssertEqual(index.search("llama kind:folder").count, 0)
+        XCTAssertEqual(index.search("models kind:folder").count, 1)
+        XCTAssertEqual(index.search("llama path:models").count, 2, "path filter scopes to the subfolder")
+        XCTAssertEqual(index.search("huge llama").map(\.name), ["llama-huge.gguf"], "AND of substrings")
+        // Filter-only query (no name needle): arena walk path.
+        XCTAssertEqual(index.search("size:>1gb kind:file").map(\.name), ["llama-huge.gguf"])
+    }
+
+    // MARK: - SearchService (multi-volume namespace)
+
+    func testSearchServiceIndexesAndSearches() throws {
+        // Second fixture "volume" (just another directory — the service doesn't care).
+        let other = fm.temporaryDirectory.appendingPathComponent("ds-vol-\(UUID().uuidString)")
+        try fm.createDirectory(at: other, withIntermediateDirectories: true)
+        try Data(count: 2048).write(to: other.appendingPathComponent("unique-zzq.bin"))
+        defer { try? fm.removeItem(at: other) }
+        defer { try? fm.removeItem(at: IndexStore.url(forRoot: root.path)) }
+        defer { try? fm.removeItem(at: IndexStore.url(forRoot: other.path)) }
+
+        let service = SearchService()
+        let ready = expectation(description: "both volumes ready")
+        ready.assertForOverFulfill = false // status notifications can repeat post-ready
+        service.onChange = { infos in
+            let readyCount = infos.filter {
+                if case .ready = $0.status { return true } else { return false }
+            }.count
+            if readyCount == 2 { ready.fulfill() }
+        }
+        service.start(roots: [root.path, other.path])
+        wait(for: [ready], timeout: 15)
+
+        let hits = service.search("unique-zzq")
+        XCTAssertEqual(hits.count, 1)
+        XCTAssertTrue(hits[0].path.hasSuffix("unique-zzq.bin"))
+        // Merged namespace: a query matching both fixture trees returns from both roots.
+        let merged = service.search("txt")
+        XCTAssertTrue(merged.contains { $0.path.hasPrefix(self.root.path) })
+        service.saveAll()
+        XCTAssertNotNil(IndexStore.load(root: other.path), "saveAll persisted the snapshot")
+    }
+
     // MARK: - Aggregation / children
 
     func testAggregateAndChildren() {
