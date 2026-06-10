@@ -617,13 +617,73 @@ final class TUI {
     // MARK: Search ('/' → prompt → results mode)
 
     /// Prompt for a query; non-empty Enter switches the left pane into results mode.
+    /// '/' opens a LIVE prompt: the results pane re-filters on every keystroke (the
+    /// blob-backed engine answers in ~ms, so it feels like Everything — type `gguf`,
+    /// watch the list collapse to your model files). Arrows and the wheel move the
+    /// highlight WHILE typing; Enter keeps the results for browsing; Esc cancels.
+    /// The engine already ranks (prefix > word-start > substring, size-desc ties).
     private func startSearch() {
-        guard let q = readPath(prompt: "Search: "), !q.isEmpty else { return }
+        var buf = ""
         stateLock.lock()
-        searchResults = index.search(q, limit: 500).sorted { $0.size > $1.size }
-        searchQuery = q
-        searchSel = 0; searchTop = 0
+        searchQuery = ""; searchResults = []; searchSel = 0; searchTop = 0
         stateLock.unlock()
+        while true {
+            render()
+            drawInputBar("Search: " + buf + "▏")
+            var b = [UInt8](repeating: 0, count: 64)
+            let n = read(STDIN_FILENO, &b, b.count)
+            if n == 0 { cancelSearch(); return }    // EOF
+            if n < 0 { continue }                   // EINTR (resize) → redraw
+            let bytes = Array(b[0..<n])
+
+            if bytes[0] == 0x1b {
+                if n == 1 { cancelSearch(); return } // bare Esc → cancel
+                // Escape SEQUENCE: arrows / wheel steer the highlight mid-typing. Letters
+                // must NOT go through decodeKey here — 'k' is text in a query, not "up".
+                stateLock.lock()
+                let last = max(0, searchResults.count - 1)
+                switch decodeKey(bytes) {
+                case .up:         searchSel = max(0, searchSel - 1)
+                case .down:       searchSel = min(last, searchSel + 1)
+                case .scrollUp:   searchSel = max(0, searchSel - 3)
+                case .scrollDown: searchSel = min(last, searchSel + 3)
+                case .top:        searchSel = 0
+                case .bottom:     searchSel = last
+                default: break                       // other sequences: ignore
+                }
+                stateLock.unlock()
+                continue
+            }
+
+            var changed = false
+            for c in bytes {
+                if c == 0x0d || c == 0x0a {          // Enter → keep results, browse mode
+                    if buf.isEmpty { cancelSearch() }
+                    dirty = true
+                    return
+                }
+                if c == 0x7f || c == 0x08 {
+                    if !buf.isEmpty { buf.removeLast(); changed = true }
+                } else if c >= 0x20 && c < 0x7f {
+                    buf.append(Character(UnicodeScalar(c)))
+                    changed = true
+                }
+            }
+            if changed {
+                stateLock.lock()
+                searchQuery = buf
+                searchResults = buf.isEmpty ? [] : index.search(buf, limit: 500)
+                searchSel = 0; searchTop = 0
+                stateLock.unlock()
+            }
+        }
+    }
+
+    private func cancelSearch() {
+        stateLock.lock()
+        searchQuery = nil; searchResults = []
+        stateLock.unlock()
+        dirty = true
     }
 
     /// Key handling while results are shown: navigate, Enter jumps to the result's parent

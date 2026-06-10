@@ -17,6 +17,7 @@ struct ContentView: View {
     @State private var searchOpen = false
     @State private var searchText = ""
     @State private var searchResults: [SearchResult] = []
+    @State private var searchSel = 0   // keyboard highlight in the results overlay
     @State private var searchWork: DispatchWorkItem?
     @FocusState private var searchFocused: Bool
     @Environment(\.scenePhase) private var scenePhase
@@ -180,6 +181,16 @@ struct ContentView: View {
                         .focused($searchFocused)
                         .onExitCommand { closeSearch() }   // Esc dismisses field + results
                         .onChange(of: searchText) { _, q in scheduleSearch(q) }
+                        // Everything-feel: drive the results list without leaving the field.
+                        .onKeyPress(.downArrow) {
+                            searchSel = min(searchSel + 1, max(0, searchResults.count - 1)); return .handled
+                        }
+                        .onKeyPress(.upArrow) { searchSel = max(0, searchSel - 1); return .handled }
+                        .onKeyPress(.return) {
+                            guard searchResults.indices.contains(searchSel) else { return .ignored }
+                            selected = searchResults[searchSel].node
+                            return .handled
+                        }
                 }
                 // File actions as clean borderless icons (matching the theme menu), tooltips for clarity.
                 HStack(spacing: 12) {
@@ -214,11 +225,18 @@ struct ContentView: View {
     /// popover becomes the key window and steals focus from the field mid-typing.
     @ViewBuilder private var searchOverlay: some View {
         if searchOpen && !searchResults.isEmpty {
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(searchResults, id: \.node) { r in searchRow(r) }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(searchResults.enumerated()), id: \.element.node) { i, r in
+                            searchRow(r, highlighted: i == searchSel).id(r.node)
+                        }
+                    }
+                    .padding(.vertical, 4)
                 }
-                .padding(.vertical, 4)
+                .onChange(of: searchSel) { _, i in
+                    if searchResults.indices.contains(i) { proxy.scrollTo(searchResults[i].node) }
+                }
             }
             .frame(width: 400)
             .frame(maxHeight: 300)
@@ -230,7 +248,7 @@ struct ContentView: View {
         }
     }
 
-    private func searchRow(_ r: SearchResult) -> some View {
+    private func searchRow(_ r: SearchResult, highlighted: Bool) -> some View {
         // Selecting keeps the list open for further picks; the tree's onChange handles
         // the reveal/scroll.
         Button { selected = r.node } label: {
@@ -247,18 +265,20 @@ struct ContentView: View {
             }
             .padding(.horizontal, 10).padding(.vertical, 4)
             .contentShape(Rectangle())
+            .background(highlighted ? Color.accentColor.opacity(0.22) : .clear)
         }
         .buttonStyle(.plain)
     }
 
-    /// ~150ms debounce so a fast typist doesn't run a full-index search per keystroke.
+    /// Queries are single-digit ms (memmem blob sweep) — 20ms only coalesces a fast
+    /// burst of keystrokes so the list doesn't churn mid-word.
     private func scheduleSearch(_ q: String) {
         searchWork?.cancel()
         let needle = q.trimmingCharacters(in: .whitespaces)
-        guard !needle.isEmpty else { searchResults = []; return }   // cleared → results close
-        let item = DispatchWorkItem { searchResults = model.search(needle) }
+        guard !needle.isEmpty else { searchResults = []; searchSel = 0; return }
+        let item = DispatchWorkItem { searchResults = model.search(needle); searchSel = 0 }
         searchWork = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: item)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02, execute: item)
     }
 
     private func toggleSearch() {

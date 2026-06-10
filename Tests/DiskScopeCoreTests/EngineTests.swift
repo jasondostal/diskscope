@@ -62,6 +62,53 @@ final class EngineTests: XCTestCase {
         XCTAssertTrue(index.search("nonexistent-zzz").isEmpty)
     }
 
+    // MARK: - Search engine (blob + memmem + ranking)
+
+    /// Prefix beats word-start beats mid-word; within a rank, bigger first.
+    func testSearchRanking() {
+        let index = FileIndex()
+        let root = index.directory(parent: -1, name: "/r", allocSize: 0, modTime: 0, createTime: 0)
+        index.file(parent: root, name: "report.pdf", allocSize: 100, modTime: 0, createTime: 0)   // mid-word "port"
+        index.file(parent: root, name: "my-port.txt", allocSize: 100, modTime: 0, createTime: 0)  // word-start
+        index.file(parent: root, name: "portal.log", allocSize: 100, modTime: 0, createTime: 0)   // prefix, smaller
+        index.file(parent: root, name: "PORTABLE.bin", allocSize: 999, modTime: 0, createTime: 0) // prefix, bigger
+        index.aggregate()
+        let names = index.search("port").map(\.name)
+        XCTAssertEqual(names, ["PORTABLE.bin", "portal.log", "my-port.txt", "report.pdf"])
+    }
+
+    /// The '/' separator makes cross-name matches impossible, and '/' queries match nothing.
+    func testSearchNeverMatchesAcrossNames() {
+        let index = FileIndex()
+        let root = index.directory(parent: -1, name: "/r", allocSize: 0, modTime: 0, createTime: 0)
+        index.file(parent: root, name: "xy", allocSize: 1, modTime: 0, createTime: 0)
+        index.file(parent: root, name: "zw", allocSize: 1, modTime: 0, createTime: 0)
+        index.aggregate()
+        XCTAssertTrue(index.search("yz").isEmpty, "no phantom match spanning two names")
+        XCTAssertTrue(index.search("y/z").isEmpty, "'/' can't appear in a name")
+        XCTAssertEqual(index.search("xy").count, 1)
+    }
+
+    /// The Everything contract: keystroke-speed queries on a big index. 200k synthetic
+    /// names, generous 100ms budget (typical is single-digit ms in release).
+    func testSearchLatencyOnLargeIndex() {
+        let index = FileIndex()
+        let root = index.directory(parent: -1, name: "/big", allocSize: 0, modTime: 0, createTime: 0)
+        for i in 0..<200_000 {
+            index.file(parent: root, name: "file-\(i)-some-longer-name.dat",
+                       allocSize: UInt64(i), modTime: 0, createTime: 0)
+        }
+        index.file(parent: root, name: "the-needle-in-question.gguf", allocSize: 5, modTime: 0, createTime: 0)
+        index.aggregate()
+        let t0 = DispatchTime.now()
+        let hits = index.search("needle-in")
+        let ms = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1e6
+        XCTAssertEqual(hits.count, 1)
+        XCTAssertLessThan(ms, 100, "blob sweep must stay keystroke-fast (was \(ms)ms)")
+        // Broad query exercises the hit cap + ranking path without blowing up.
+        XCTAssertEqual(index.search("file-", limit: 50).count, 50)
+    }
+
     // MARK: - Aggregation / children
 
     func testAggregateAndChildren() {

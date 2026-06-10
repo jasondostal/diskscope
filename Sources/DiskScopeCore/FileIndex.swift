@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// One entry in the index. Stored in a flat array (arena); relationships are array
 /// indices, not pointers — cache-friendly, and supports both a linear name scan (search)
@@ -88,9 +89,19 @@ public final class FileIndex: ScanSink {
     private var dirPath: [Int: String] = [:]
     private var pathToDir: [String: Int] = [:]
 
-    // Lowercased name per node, maintained on append — search lowercases ONCE per node's
-    // lifetime instead of allocating a fresh lowercased String per node per query.
-    private var lowerNames: [String] = []
+    // Search blob: every node's lowercased name, concatenated into ONE contiguous UTF-8
+    // buffer with '/' separators ('/' cannot occur inside a POSIX filename, so a needle
+    // without '/' can never match across a name boundary). memmem(3) scans this at memory
+    // bandwidth — single-digit milliseconds for any substring over a million names. Same
+    // brute force Everything uses: at this scale, brute force beats clever.
+    private var nameBlob: [UInt8] = []
+    private var nameStart: [UInt32] = []   // per-node start offset into nameBlob
+
+    private func appendSearchName(_ name: String) {
+        nameStart.append(UInt32(nameBlob.count))
+        nameBlob.append(contentsOf: name.lowercased().utf8)
+        nameBlob.append(0x2F) // '/'
+    }
 
     public init() {}
 
@@ -100,9 +111,9 @@ public final class FileIndex: ScanSink {
         self.init()
         self.nodes = nodes
         self.unreadableCount = unreadableCount
-        lowerNames.reserveCapacity(nodes.count)
+        nameStart.reserveCapacity(nodes.count)
         for i in nodes.indices {
-            lowerNames.append(nodes[i].name.lowercased())
+            appendSearchName(nodes[i].name)
             if nodes[i].isDir && !nodes[i].deleted {
                 let p = Int(nodes[i].parent)
                 // A live node's ancestors are live (tombstoning marks whole subtrees), so
@@ -150,7 +161,7 @@ public final class FileIndex: ScanSink {
     private func append(_ node: IndexNode, parent: Int) -> Int {
         let idx = nodes.count
         nodes.append(node)
-        lowerNames.append(node.name.lowercased())
+        appendSearchName(node.name)
         if parent >= 0 {
             // Prepend into the parent's child list (O(1)); order within a dir isn't
             // promised. The scanner appends a dir before its children, so parent < child.
@@ -358,20 +369,58 @@ public final class FileIndex: ScanSink {
 
     // MARK: - Search (v1.0)
 
-    /// Case-insensitive substring match over every name. Linear scan over the precomputed
-    /// lowercase blob — no per-node allocation per query (the old per-query lowercased()
-    /// was ~1M String allocs per keystroke on a home-dir index).
+    /// Case-insensitive substring search, Everything-style: one memmem(3) sweep over the
+    /// contiguous name blob (~ms per keystroke on a million names), then rank — prefix
+    /// match beats word-start beats mid-word, ties broken by size descending (this is a
+    /// disk tool: the biggest match is almost always the one you want).
     public func search(_ query: String, limit: Int = 1000) -> [SearchResult] {
-        let needle = query.lowercased()
-        guard !needle.isEmpty else { return [] }
-        var out: [SearchResult] = []
-        for i in nodes.indices {
-            if !nodes[i].deleted, lowerNames[i].contains(needle) {
-                out.append(result(for: i))
-                if out.count >= limit { break }
+        let needle = Array(query.lowercased().utf8)
+        // '/' is the blob separator and can't occur in a filename — no name can match.
+        guard !needle.isEmpty, !needle.contains(0x2F) else { return [] }
+
+        struct Hit { let node: Int; let rank: UInt8; let size: UInt64 }
+        var hits: [Hit] = []
+        // Bound the raw sweep: a 1-char query can hit most of the index; 50k candidates
+        // sort in ~ms and is far more than any UI shows. (Past the cap, results favor
+        // arena order — fine for a query that broad.)
+        let maxHits = 50_000
+
+        nameBlob.withUnsafeBufferPointer { blob in
+            guard let base = blob.baseAddress, !blob.isEmpty else { return }
+            needle.withUnsafeBufferPointer { np in
+                var pos = 0
+                while pos < blob.count, hits.count < maxHits {
+                    guard let found = memmem(base + pos, blob.count - pos, np.baseAddress!, np.count) else { break }
+                    let at = UnsafeRawPointer(found) - UnsafeRawPointer(base)
+                    // Which name? Last start <= at (nameStart is ascending).
+                    var lo = 0, hi = nameStart.count - 1
+                    while lo < hi {
+                        let mid = (lo + hi + 1) >> 1
+                        if Int(nameStart[mid]) <= at { lo = mid } else { hi = mid - 1 }
+                    }
+                    let node = lo
+                    let start = Int(nameStart[node])
+                    let end = node + 1 < nameStart.count ? Int(nameStart[node + 1]) - 1 : nameBlob.count - 1
+                    if !nodes[node].deleted {
+                        let rank: UInt8
+                        if at == start {
+                            rank = 0                       // prefix
+                        } else {
+                            let prev = blob[at - 1]
+                            // Word boundary: separator-ish byte before the match.
+                            rank = (prev == 0x2E || prev == 0x2D || prev == 0x5F || prev == 0x20
+                                    || prev == 0x28 || prev == 0x5B || prev == 0x2B) ? 1 : 2
+                        }
+                        let n = nodes[node]
+                        hits.append(Hit(node: node, rank: rank, size: n.isDir ? n.totalSize : n.ownSize))
+                    }
+                    pos = end + 1 // one hit per name — skip to the next name
+                }
             }
         }
-        return out
+
+        hits.sort { $0.rank != $1.rank ? $0.rank < $1.rank : $0.size > $1.size }
+        return hits.prefix(limit).map { result(for: $0.node) }
     }
 
     /// Node for an absolute path: directories resolve via the path map; files resolve via
