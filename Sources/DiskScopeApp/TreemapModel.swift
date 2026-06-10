@@ -14,7 +14,18 @@ func canonicalPath(_ p: String) -> String {
 func volumeUsedBytes(_ path: String) -> UInt64 {
     var s = statfs()
     guard statfs(path, &s) == 0, s.f_bsize > 0 else { return 0 }
-    return UInt64(s.f_blocks - s.f_bfree) * UInt64(s.f_bsize)
+    var used = UInt64(s.f_blocks - s.f_bfree) * UInt64(s.f_bsize)
+    // "/" is the small sealed SYSTEM volume (~12GB); the user's bytes live on the Data
+    // volume firmlinked beside it. Without summing both, the denominator is ~60x short
+    // and the progress bar pegs at 99% seconds into an honest multi-minute scan.
+    if path == "/" {
+        var d = statfs()
+        if statfs("/System/Volumes/Data", &d) == 0, d.f_bsize > 0,
+           (d.f_fsid.val.0, d.f_fsid.val.1) != (s.f_fsid.val.0, s.f_fsid.val.1) {
+            used += UInt64(d.f_blocks - d.f_bfree) * UInt64(d.f_bsize)
+        }
+    }
+    return used
 }
 
 /// View model: owns the scanned index and lays out treemap tiles on demand (cached by

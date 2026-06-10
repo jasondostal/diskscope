@@ -76,16 +76,22 @@ public enum ParallelIndexBuilder {
         var local: [(path: String, entries: [DiskScopeScanner.Entry])] = []
         var localErrors = 0
 
-        while let chunkRoot = shared.pop() {
-            var spill: [String] = []
+        while let (chunkRoot, chunkParentDev) = shared.pop() {
+            var spill: [WorkItem] = []
             var entriesDone = 0
             var bytes: UInt64 = 0
 
-            func descend(fd: Int32, path: String, depth: Int) {
+            func descend(fd: Int32, path: String, depth: Int, parentDev: UInt64) {
                 guard let level = DiskScopeScanner.scanLevel(fd: fd, buf: buf, bufSize: bufSize) else {
                     localErrors += 1
                     return
                 }
+                // Device boundary = mount point: stay on the scanned volume (group). SMB /
+                // NFS / autofs / external mounts turn the walk into a network crawl — skip
+                // them (the mount-point dir stays in the tree, empty). parentDev 0 = the
+                // scan root, never refused, so scanning a share directly still works.
+                if parentDev != 0, level.dev != parentDev,
+                   !DiskScopeScanner.crossableMount(fd: fd) { return }
                 // Dedup by (device, inode): firmlinks (e.g. /Users and /System/Volumes/Data/Users
                 // on APFS) and bind mounts expose the same directory under two paths — count once.
                 guard shared.firstVisit(dev: level.dev, ino: level.ino) else { return }
@@ -95,7 +101,7 @@ public enum ParallelIndexBuilder {
                 for e in level.entries {
                     if e.isDir {
                         if entriesDone >= chunkBudget || depth >= maxInlineDepth {
-                            spill.append(prefix + e.name)
+                            spill.append(WorkItem(path: prefix + e.name, parentDev: level.dev))
                             if spill.count >= spillFlush {
                                 shared.push(children: spill)
                                 spill.removeAll(keepingCapacity: true)
@@ -103,7 +109,7 @@ public enum ParallelIndexBuilder {
                         } else {
                             let cfd = openat(fd, e.name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
                             if cfd >= 0 {
-                                descend(fd: cfd, path: prefix + e.name, depth: depth + 1)
+                                descend(fd: cfd, path: prefix + e.name, depth: depth + 1, parentDev: level.dev)
                                 close(cfd)
                             } else {
                                 localErrors += 1
@@ -117,7 +123,7 @@ public enum ParallelIndexBuilder {
 
             let fd = open(chunkRoot, O_RDONLY | O_DIRECTORY)
             if fd >= 0 {
-                descend(fd: fd, path: chunkRoot, depth: 0)
+                descend(fd: fd, path: chunkRoot, depth: 0, parentDev: chunkParentDev)
                 close(fd)
             } else {
                 localErrors += 1
@@ -125,6 +131,13 @@ public enum ParallelIndexBuilder {
             shared.complete(children: spill, entries: entriesDone, bytes: bytes)
         }
         shared.merge(local, errors: localErrors)
+    }
+
+    /// One queued unit: a directory path plus its PARENT's device, so a popped chunk can
+    /// apply the mount-boundary rule exactly as inline descent does.
+    private struct WorkItem {
+        let path: String
+        let parentDev: UInt64
     }
 
     private static func assemble(path: String, name: String, parent: Int,
@@ -149,7 +162,7 @@ public enum ParallelIndexBuilder {
     /// with an `outstanding` counter (popped-but-not-completed) for termination.
     private final class Shared {
         private let cond = NSCondition()
-        private var pending: [String]
+        private var pending: [WorkItem]
         private var outstanding = 0
 
         // Dedup set on its own cheap lock: it's touched once per directory (hot), while the
@@ -167,22 +180,22 @@ public enum ParallelIndexBuilder {
         private var lastReported = 0
 
         init(seed: String, onProgress: ((Int, UInt64) -> Void)?) {
-            pending = [seed]
+            pending = [WorkItem(path: seed, parentDev: 0)]
             self.onProgress = onProgress
             byPath.reserveCapacity(1 << 16)
         }
 
-        func pop() -> String? {
+        func pop() -> (path: String, parentDev: UInt64)? {
             cond.lock(); defer { cond.unlock() }
             while pending.isEmpty && outstanding > 0 { cond.wait() }
             guard let p = pending.popLast() else { return nil } // empty + nothing outstanding = done
             outstanding += 1
-            return p
+            return (p.path, p.parentDev)
         }
 
         /// Mid-chunk spill: enqueue work WITHOUT completing the chunk (outstanding is
         /// untouched, so termination stays correct — the pusher is still active).
-        func push(children: [String]) {
+        func push(children: [WorkItem]) {
             guard !children.isEmpty else { return }
             cond.lock()
             pending.append(contentsOf: children)
@@ -190,7 +203,7 @@ public enum ParallelIndexBuilder {
             cond.unlock()
         }
 
-        func complete(children: [String], entries: Int, bytes b: UInt64) {
+        func complete(children: [WorkItem], entries: Int, bytes b: UInt64) {
             cond.lock()
             pending.append(contentsOf: children)
             outstanding -= 1

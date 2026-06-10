@@ -46,6 +46,21 @@ public enum DiskScopeScanner {
     // fsobj_type_t values (sys/vnode.h). getattrlistbulk does NOT emit "." or "..".
     private static let VDIR: UInt32 = 2
 
+    /// May a volume scan continue across this device boundary? Only into the APFS volume-
+    /// group siblings firmlinks stitch into the system tree (mounted under /System/Volumes/
+    /// — Data above all). Network shares, external disks, mounted DMGs, and autofs stay OUT:
+    /// descending into an SMB mount under /Volumes turns a local metadata walk into a
+    /// network crawl that reads as a hang. Scan a mount directly to scan it.
+    public static func crossableMount(fd: Int32) -> Bool {
+        var s = statfs()
+        guard fstatfs(fd, &s) == 0 else { return false }
+        guard s.f_flags & UInt32(MNT_LOCAL) != 0 else { return false }
+        let mnt = withUnsafeBytes(of: s.f_mntonname) {
+            String(cString: $0.bindMemory(to: CChar.self).baseAddress!)
+        }
+        return mnt.hasPrefix("/System/Volumes/")
+    }
+
     /// Convenience tally scan (CLI + `find` cross-check).
     public static func scan(path: String) -> ScanStats {
         let sink = TallySink()
@@ -178,11 +193,18 @@ public enum DiskScopeScanner {
     private static func scanRoot(path: String, rootToken: Int, into sink: ScanSink) {
         let fd = open(path, O_RDONLY | O_DIRECTORY)
         if fd < 0 { sink.unreadable(); return }
-        scanDir(fd: fd, parent: rootToken, into: sink)
+        scanDir(fd: fd, parent: rootToken, parentDev: 0, into: sink)
         close(fd)
     }
 
-    private static func scanDir(fd: Int32, parent: Int, into sink: ScanSink) {
+    private static func scanDir(fd: Int32, parent: Int, parentDev: UInt64, into sink: ScanSink) {
+        // Device boundary = mount point. Stay on the volume (group) being scanned — the
+        // mount-point dir itself stays in the tree, empty. parentDev 0 = the scan root:
+        // never refused, so scanning a network share DIRECTLY still works.
+        var st = stat()
+        let dev = fstat(fd, &st) == 0 ? UInt64(bitPattern: Int64(st.st_dev)) : 0
+        if parentDev != 0, dev != parentDev, !crossableMount(fd: fd) { return }
+
         // C constants import with mixed signedness; normalize to UInt32 before OR-ing.
         let bitReturned = UInt32(truncatingIfNeeded: ATTR_CMN_RETURNED_ATTRS)
         let bitName = UInt32(truncatingIfNeeded: ATTR_CMN_NAME)
@@ -273,7 +295,7 @@ public enum DiskScopeScanner {
         for (name, token) in childDirs {
             let child = openat(fd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
             if child >= 0 {
-                scanDir(fd: child, parent: token, into: sink)
+                scanDir(fd: child, parent: token, parentDev: dev, into: sink)
                 close(child)
             } else {
                 sink.unreadable()
